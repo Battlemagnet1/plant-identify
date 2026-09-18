@@ -98,6 +98,8 @@ class AppContainer(context: Context) {
         PlantRepository(
             database = database,
             draftStore = captureDraftStore,
+            // 删除档案时要显式删图片文件 —— Room 级联只管数据库行
+            imageStore = imageStore,
         )
     }
 

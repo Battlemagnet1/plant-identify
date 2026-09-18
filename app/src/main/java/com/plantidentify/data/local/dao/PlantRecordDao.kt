@@ -7,6 +7,7 @@ import androidx.room.Query
 import androidx.room.Transaction
 import androidx.room.Update
 import com.plantidentify.data.local.entity.PlantRecordEntity
+import com.plantidentify.data.local.projection.PlantCardRow
 import com.plantidentify.data.local.relation.PlantWithObservations
 import com.plantidentify.data.local.relation.PlantWithObservationsAndImages
 import kotlinx.coroutines.flow.Flow
@@ -101,6 +102,110 @@ interface PlantRecordDao {
     /** 低置信度候选：仅用于「可能已存在相同植物」提示，必须由用户确认 */
     @Query("SELECT * FROM plant_record WHERE name LIKE '%' || :name || '%' LIMIT 5")
     suspend fun findFuzzyByName(name: String): List<PlantRecordEntity>
+
+    // ---------- 列表与搜索（规格书第十六、十九节）----------
+
+    /**
+     * 植物列表卡片。
+     *
+     * 观察次数与照片数用子查询算好 —— 列表页不该把全部观察与图片读进内存再统计。
+     * 封面图优先取「代表观察」里的第一张，其次取最近一次观察的第一张。
+     */
+    @Query(
+        """
+        SELECT
+            p.id          AS plantId,
+            p.name        AS name,
+            p.latinName   AS latinName,
+            p.family      AS family,
+            p.genus       AS genus,
+            p.category    AS category,
+            p.confidence  AS confidence,
+            p.updatedAt   AS updatedAt,
+            (SELECT COUNT(*) FROM plant_observation o WHERE o.plantId = p.id)
+                AS observationCount,
+            (SELECT COUNT(*) FROM observation_image i
+                INNER JOIN plant_observation o2 ON i.observationId = o2.id
+                WHERE o2.plantId = p.id)
+                AS photoCount,
+            (SELECT i3.imagePath FROM observation_image i3
+                INNER JOIN plant_observation o3 ON i3.observationId = o3.id
+                WHERE o3.plantId = p.id
+                ORDER BY o3.isPrimary DESC, o3.timestamp DESC, i3.sortOrder ASC
+                LIMIT 1)
+                AS coverPath
+        FROM plant_record p
+        ORDER BY p.updatedAt DESC
+        """,
+    )
+    fun observePlantCards(): Flow<List<PlantCardRow>>
+
+    /**
+     * 搜索 + 筛选（规格书第十九节）。
+     *
+     * 搜索覆盖：中文名 / 拉丁学名 / 科 / 属 / 植物类型 / 备注。
+     * 筛选覆盖：科 / 属 / 日期区间 / 地点。
+     *
+     * 日期与地点是**观察**的属性而不是档案的，所以用 EXISTS 子查询匹配 ——
+     * 只要该植物有一次观察落在区间内（或地点命中），这株植物就应出现在结果里。
+     * 传空串或 0 表示该条件不生效，这样一条 SQL 就能覆盖全部筛选组合。
+     */
+    @Query(
+        """
+        SELECT
+            p.id          AS plantId,
+            p.name        AS name,
+            p.latinName   AS latinName,
+            p.family      AS family,
+            p.genus       AS genus,
+            p.category    AS category,
+            p.confidence  AS confidence,
+            p.updatedAt   AS updatedAt,
+            (SELECT COUNT(*) FROM plant_observation o WHERE o.plantId = p.id)
+                AS observationCount,
+            (SELECT COUNT(*) FROM observation_image i
+                INNER JOIN plant_observation o2 ON i.observationId = o2.id
+                WHERE o2.plantId = p.id)
+                AS photoCount,
+            (SELECT i3.imagePath FROM observation_image i3
+                INNER JOIN plant_observation o3 ON i3.observationId = o3.id
+                WHERE o3.plantId = p.id
+                ORDER BY o3.isPrimary DESC, o3.timestamp DESC, i3.sortOrder ASC
+                LIMIT 1)
+                AS coverPath
+        FROM plant_record p
+        WHERE (
+                :keyword = ''
+                OR p.name LIKE '%' || :keyword || '%'
+                OR IFNULL(p.latinName, '') LIKE '%' || :keyword || '%'
+                OR IFNULL(p.family, '') LIKE '%' || :keyword || '%'
+                OR IFNULL(p.genus, '') LIKE '%' || :keyword || '%'
+                OR IFNULL(p.category, '') LIKE '%' || :keyword || '%'
+                OR IFNULL(p.note, '') LIKE '%' || :keyword || '%'
+              )
+          AND (:family = '' OR IFNULL(p.family, '') = :family)
+          AND (:genus = '' OR IFNULL(p.genus, '') = :genus)
+          AND (:fromDate = 0 OR EXISTS (
+                SELECT 1 FROM plant_observation o4
+                WHERE o4.plantId = p.id AND o4.timestamp >= :fromDate))
+          AND (:toDate = 0 OR EXISTS (
+                SELECT 1 FROM plant_observation o5
+                WHERE o5.plantId = p.id AND o5.timestamp <= :toDate))
+          AND (:place = '' OR EXISTS (
+                SELECT 1 FROM plant_observation o6
+                WHERE o6.plantId = p.id
+                  AND IFNULL(o6.locationName, '') LIKE '%' || :place || '%'))
+        ORDER BY p.updatedAt DESC
+        """,
+    )
+    fun searchPlantCards(
+        keyword: String,
+        family: String,
+        genus: String,
+        fromDate: Long,
+        toDate: Long,
+        place: String,
+    ): Flow<List<PlantCardRow>>
 
     // ---------- 统计（规格书第二十节，口径 2026-09-18 已确认）----------
 

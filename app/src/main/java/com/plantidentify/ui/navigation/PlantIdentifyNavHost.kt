@@ -13,6 +13,10 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.plantidentify.AppContainer
 import com.plantidentify.ui.camera.CameraCaptureScreen
+import com.plantidentify.ui.screens.edit.PlantEditScreen
+import com.plantidentify.ui.screens.edit.PlantEditViewModel
+import com.plantidentify.ui.screens.observation.ObservationViewModel
+import com.plantidentify.ui.screens.plants.PlantListViewModel
 import com.plantidentify.ui.screens.addplant.AddPlantScreen
 import com.plantidentify.ui.screens.addplant.AddPlantViewModel
 import com.plantidentify.ui.screens.detail.PlantDetailScreen
@@ -60,6 +64,7 @@ fun PlantIdentifyNavHost(
                     navController.navigateSingleTop(Routes.observation(observationId))
                 },
                 onOpenRecognition = { navController.navigateSingleTop(Routes.RECOGNITION) },
+                imageStore = container.imageStore,
                 viewModel = homeViewModel,
             )
         }
@@ -152,6 +157,8 @@ fun PlantIdentifyNavHost(
                     }
                 },
                 onRetry = recognitionViewModel::recognize,
+                onAppendToExisting = recognitionViewModel::appendToExistingPlant,
+                onCreateNewPlant = recognitionViewModel::createNewPlant,
                 onSave = recognitionViewModel::saveCurrentResult,
                 onRegenerateAnalysis = recognitionViewModel::regenerateAnalysis,
                 onBack = navController::popBackStack,
@@ -159,7 +166,18 @@ fun PlantIdentifyNavHost(
         }
 
         composable(Routes.SEARCH) {
-            SearchScreen(onBack = navController::popBackStack)
+            val plantListViewModel: PlantListViewModel = viewModel(
+                factory = PlantListViewModel.factory(repository = container.plantRepository),
+            )
+
+            SearchScreen(
+                onBack = navController::popBackStack,
+                onOpenPlantDetail = { plantId ->
+                    navController.navigateSingleTop(Routes.plantDetail(plantId))
+                },
+                imageStore = container.imageStore,
+                viewModel = plantListViewModel,
+            )
         }
 
         composable(Routes.SETTINGS) {
@@ -198,6 +216,37 @@ fun PlantIdentifyNavHost(
                 imageStore = container.imageStore,
                 viewModel = detailViewModel,
                 onBack = navController::popBackStack,
+                onEdit = { id -> navController.navigateSingleTop(Routes.plantEdit(id)) },
+                onOpenObservations = { id ->
+                    // 详情页的「查看所有观察」进的是这株植物的全部观察，
+                    // 而 Routes.OBSERVATION 走的是单条观察 —— 两者参数不同，
+                    // 这里复用同一个页面但换用 plantId 参数
+                    navController.navigateSingleTop(Routes.plantObservations(id))
+                },
+                onDeleted = navController::popBackStack,
+            )
+        }
+
+        composable(
+            route = Routes.PLANT_EDIT,
+            arguments = listOf(
+                navArgument(Routes.KEY_PLANT_ID) { type = NavType.LongType },
+            ),
+        ) { backStackEntry ->
+            val plantId = backStackEntry.arguments?.getLong(Routes.KEY_PLANT_ID) ?: 0L
+
+            val editViewModel: PlantEditViewModel = viewModel(
+                factory = PlantEditViewModel.factory(
+                    plantId = plantId,
+                    repository = container.plantRepository,
+                ),
+            )
+
+            PlantEditScreen(
+                viewModel = editViewModel,
+                onBack = navController::popBackStack,
+                // 保存成功后退回详情页，让用户立刻看到改动结果
+                onSaved = navController::popBackStack,
             )
         }
 
@@ -207,10 +256,53 @@ fun PlantIdentifyNavHost(
                 navArgument(Routes.KEY_OBSERVATION_ID) { type = NavType.LongType },
             ),
         ) { backStackEntry ->
+            val observationId = backStackEntry.arguments
+                ?.getLong(Routes.KEY_OBSERVATION_ID) ?: 0L
+
+            val observationViewModel: ObservationViewModel = viewModel(
+                factory = ObservationViewModel.factory(
+                    plantId = null,
+                    observationId = observationId,
+                    repository = container.plantRepository,
+                    draftStore = container.captureDraftStore,
+                ),
+            )
+
             ObservationScreen(
-                observationId = backStackEntry.arguments
-                    ?.getLong(Routes.KEY_OBSERVATION_ID) ?: 0L,
+                imageStore = container.imageStore,
+                viewModel = observationViewModel,
                 onBack = navController::popBackStack,
+                // 补图重识别：草稿已装好，去添加页继续加图并重新识别
+                onReanalysisStarted = {
+                    navController.navigateSingleTop(Routes.ADD_PLANT)
+                },
+            )
+        }
+
+        composable(
+            route = Routes.PLANT_OBSERVATIONS,
+            arguments = listOf(
+                navArgument(Routes.KEY_PLANT_ID) { type = NavType.LongType },
+            ),
+        ) { backStackEntry ->
+            val plantId = backStackEntry.arguments?.getLong(Routes.KEY_PLANT_ID) ?: 0L
+
+            val observationViewModel: ObservationViewModel = viewModel(
+                factory = ObservationViewModel.factory(
+                    plantId = plantId,
+                    observationId = null,
+                    repository = container.plantRepository,
+                    draftStore = container.captureDraftStore,
+                ),
+            )
+
+            ObservationScreen(
+                imageStore = container.imageStore,
+                viewModel = observationViewModel,
+                onBack = navController::popBackStack,
+                onReanalysisStarted = {
+                    navController.navigateSingleTop(Routes.ADD_PLANT)
+                },
             )
         }
     }

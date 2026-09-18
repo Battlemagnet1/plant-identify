@@ -53,6 +53,25 @@ class CaptureDraftStore(private val context: Context) {
         context.draftDataStore.edit { prefs -> prefs.remove(jsonKey) }
     }
 
+    /**
+     * 用一批已有照片重建草稿，并把它指向某个已有观察。
+     *
+     * 用于「对已有观察补图并重新识别」：用户进到这条观察的补图流程时，
+     * 草稿先装入该观察现有的照片（规格书第十四点五节要求
+     * 「原有照片 + 新增照片」一起参与重新识别），用户在添加页继续加图，
+     * 识别完成后写回**同一条** Observation。
+     */
+    suspend fun seedForObservation(observationId: Long, images: List<DraftImage>) {
+        context.draftDataStore.edit { prefs ->
+            prefs[jsonKey] = encode(
+                CaptureDraft(
+                    images = images.take(CaptureDraft.MAX_IMAGES),
+                    targetObservationId = observationId,
+                ),
+            )
+        }
+    }
+
     // ---------------- 序列化 ----------------
 
     private fun encode(draft: CaptureDraft): String {
@@ -64,13 +83,20 @@ class CaptureDraftStore(private val context: Context) {
                     .put(FIELD_ROLE, image.role.name),
             )
         }
-        return JSONObject().put(FIELD_IMAGES, array).toString()
+        return JSONObject()
+            .put(FIELD_IMAGES, array)
+            .apply {
+                // 只在需要时写这个字段，让「普通新建」的草稿保持原来的形状
+                draft.targetObservationId?.let { put(FIELD_TARGET_OBSERVATION, it) }
+            }
+            .toString()
     }
 
     private fun decode(raw: String?): CaptureDraft {
         if (raw.isNullOrBlank()) return CaptureDraft.EMPTY
         return runCatching {
-            val array = JSONObject(raw).optJSONArray(FIELD_IMAGES) ?: JSONArray()
+            val root = JSONObject(raw)
+            val array = root.optJSONArray(FIELD_IMAGES) ?: JSONArray()
             val images = buildList {
                 for (i in 0 until array.length()) {
                     val item = array.optJSONObject(i) ?: continue
@@ -83,7 +109,11 @@ class CaptureDraftStore(private val context: Context) {
                     )
                 }
             }
-            CaptureDraft(images.take(CaptureDraft.MAX_IMAGES))
+            CaptureDraft(
+                images = images.take(CaptureDraft.MAX_IMAGES),
+                targetObservationId = root.optLong(FIELD_TARGET_OBSERVATION)
+                    .takeIf { root.has(FIELD_TARGET_OBSERVATION) && it > 0L },
+            )
         }.getOrElse { error ->
             // 草稿损坏（例如升级过程中断导致写了一半）不应让应用崩溃
             Log.w(TAG, "草稿数据解析失败，已重置为空草稿", error)
@@ -100,5 +130,6 @@ class CaptureDraftStore(private val context: Context) {
         const val FIELD_IMAGES = "images"
         const val FIELD_PATH = "path"
         const val FIELD_ROLE = "role"
+        const val FIELD_TARGET_OBSERVATION = "targetObservationId"
     }
 }

@@ -9,6 +9,7 @@ import com.plantidentify.data.ai.AiFailure
 import com.plantidentify.data.ai.AiSettingsStore
 import com.plantidentify.data.ai.TextAnalysisRequest
 import com.plantidentify.data.ai.TextAnalysisResult
+import com.plantidentify.data.ai.RecognitionResult
 import com.plantidentify.data.ai.TextProvider
 import com.plantidentify.data.ai.VisionCallResult
 import com.plantidentify.data.ai.VisionImage
@@ -20,6 +21,7 @@ import com.plantidentify.data.image.ImageCompressor
 import com.plantidentify.data.local.entity.AnalysisStatus
 import com.plantidentify.data.repository.PlantRepository
 import com.plantidentify.data.storage.ImageStore
+import com.plantidentify.domain.model.MergeSuggestion
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -150,6 +152,18 @@ class RecognitionViewModel(
      *
      * 可以重复调用而不会产生重复档案：已经在保存中或已保存时直接返回，
      * 由 [SaveState] 拦住。
+     *
+     * ## 三条分支
+     *
+     * | 草稿状态 | 行为 |
+     * |---|---|
+     * | 指向已有观察（补图重识别） | **更新那条观察**，不新建，也不做归并提示 |
+     * | 普通新建 + 找到候选 | 先弹归并提示，由用户决定 |
+     * | 普通新建 + 无候选 | 直接建新档案 |
+     *
+     * 补图那条之所以跳过归并提示：用户在点「补图并重新识别」时已经明确
+     * 表示「这是同一株、同一次观察」，再问一遍「要不要加到已有植物」
+     * 是重复确认，只会让人怀疑自己点错了。
      */
     fun saveCurrentResult() {
         val current = _state.value as? RecognitionUiState.Success ?: return
@@ -159,27 +173,97 @@ class RecognitionViewModel(
             SaveState.Saving,
             is SaveState.SavedWithAnalysis,
             is SaveState.SavedWithoutAnalysis,
+            is SaveState.AwaitingMergeDecision,
             -> return
 
             else -> Unit
         }
 
         viewModelScope.launch {
-            _saveState.value = SaveState.Saving
+            val draft = draftStore.current()
 
-            // ---- 第一步：基础识别结果落库。这一步失败就没有档案，如实报错
-            val plantId = repository
-                .saveAsNewPlant(result = result, rawAiJson = current.response.rawText)
-                .getOrElse { error ->
+            // ---- 分支一：给已有观察补图 → 写回原观察
+            if (draft.isReanalysis) {
+                _saveState.value = SaveState.Saving
+                repository.reanalyzeObservation(
+                    observationId = draft.targetObservationId!!,
+                    result = result,
+                    rawAiJson = current.response.rawText,
+                ).onSuccess { plantId ->
+                    _saveState.value = SaveState.SavedToExistingObservation(plantId)
+                    // 观察内容变了，但百科是基于植物整体生成的，不必重跑
+                }.onFailure { error ->
                     _saveState.value = SaveState.Failed(
-                        error.message ?: "保存失败，请重试",
+                        error.message ?: "更新观察失败，请重试",
                     )
-                    return@launch
                 }
+                return@launch
+            }
 
-            // ---- 第二步：文字分析。失败只影响描述内容，不影响档案
-            runAnalysis(plantId, result.name, current)
+            // ---- 分支二 / 三：先问归并，再决定
+            _saveState.value = SaveState.Saving
+            val suggestion = repository.findMergeSuggestion(result)
+            if (suggestion.hasCandidate) {
+                // 只提示、不写入。是否归并完全由用户确认 —— 规格书第十四点五节
+                _saveState.value = SaveState.AwaitingMergeDecision(suggestion)
+                return@launch
+            }
+
+            saveAsNewPlant(current, result)
         }
+    }
+
+    /** 用户确认「添加到已有植物」 */
+    fun appendToExistingPlant() {
+        val current = _state.value as? RecognitionUiState.Success ?: return
+        val result = current.response.result ?: return
+        val decision = _saveState.value as? SaveState.AwaitingMergeDecision ?: return
+        val target = decision.suggestion.plant ?: return
+
+        viewModelScope.launch {
+            _saveState.value = SaveState.Saving
+            repository.appendObservation(
+                plantId = target.id,
+                result = result,
+                rawAiJson = current.response.rawText,
+            ).onSuccess { plantId ->
+                // 追加观察后不自动重跑百科：已有植物的百科是按整株生成的，
+                // 本次新增的照片未必带来新信息，主动覆盖反而可能让内容变差。
+                // 需要更新时由用户在详情页点「重新生成」。
+                _saveState.value = SaveState.SavedWithAnalysis(plantId)
+            }.onFailure { error ->
+                _saveState.value = SaveState.Failed(error.message ?: "添加观察失败，请重试")
+            }
+        }
+    }
+
+    /** 用户确认「创建新的植物」 */
+    fun createNewPlant() {
+        val current = _state.value as? RecognitionUiState.Success ?: return
+        val result = current.response.result ?: return
+        if (_saveState.value !is SaveState.AwaitingMergeDecision) return
+
+        viewModelScope.launch {
+            _saveState.value = SaveState.Saving
+            saveAsNewPlant(current, result)
+        }
+    }
+
+    /** 基础结果落库 + 文字分析（两条分支共用） */
+    private suspend fun saveAsNewPlant(
+        current: RecognitionUiState.Success,
+        result: RecognitionResult,
+    ) {
+        // ---- 第一步：基础识别结果落库。这一步失败就没有档案，如实报错
+        val plantId = repository
+            .saveAsNewPlant(result = result, rawAiJson = current.response.rawText)
+            .getOrElse { error ->
+                _saveState.value = SaveState.Failed(error.message ?: "保存失败，请重试")
+                return
+            }
+
+        // ---- 第二步：文字分析。失败只影响描述内容，不影响档案
+        runAnalysis(plantId, result.name, current)
     }
 
     /**
@@ -336,6 +420,14 @@ sealed interface SaveState {
     /** 尚未保存，等待用户确认 */
     data object NotSaved : SaveState
 
+    /**
+     * 找到了可能对应的已有植物，等用户决定是否归并。
+     *
+     * 这个状态的存在本身就是规格书的要求：**系统不得自动合并**。
+     * 它不是一个「中间态」，而是流程的正常分支。
+     */
+    data class AwaitingMergeDecision(val suggestion: MergeSuggestion) : SaveState
+
     /** 正在保存（可能包含文字分析，耗时较长） */
     data object Saving : SaveState
 
@@ -351,6 +443,14 @@ sealed interface SaveState {
         val plantId: Long,
         val reason: String,
     ) : SaveState
+
+    /**
+     * 识别结果已写回**已有观察**（补图重识别）。
+     *
+     * 与 [SavedWithAnalysis] 分开，是因为界面要给不同的下一步：
+     * 新建档案后用户多半想看详情页；而补图之后他会想确认「观察次数没变多」。
+     */
+    data class SavedToExistingObservation(val plantId: Long) : SaveState
 
     /** 保存本身失败，档案未建立 */
     data class Failed(val message: String) : SaveState

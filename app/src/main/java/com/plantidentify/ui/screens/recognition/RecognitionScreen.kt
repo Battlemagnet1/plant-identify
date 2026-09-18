@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -40,6 +41,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.plantidentify.data.ai.RecognitionResult
 import com.plantidentify.data.ai.VisionResponse
+import com.plantidentify.domain.model.MergeLevel
+import com.plantidentify.domain.model.MergeSuggestion
 import com.plantidentify.ui.components.BackIconButton
 import kotlin.math.roundToInt
 
@@ -71,12 +74,26 @@ fun RecognitionScreen(
     onOpenPlantDetail: (Long) -> Unit,
     onRetry: () -> Unit,
     onSave: () -> Unit,
+    onAppendToExisting: () -> Unit,
+    onCreateNewPlant: () -> Unit,
     onRegenerateAnalysis: () -> Unit,
     viewModel: RecognitionViewModel,
     modifier: Modifier = Modifier,
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val saveState by viewModel.saveState.collectAsStateWithLifecycle()
+
+    // 找到可能对应的已有植物时，先问用户再写入。
+    // 用对话框而不是底部栏：这是一个需要明确选择的决策点，
+    // 放在底部栏容易和「保存中/已保存」这类进度状态混在一起被忽略。
+    (saveState as? SaveState.AwaitingMergeDecision)?.let { decision ->
+        MergeDecisionDialog(
+            suggestion = decision.suggestion,
+            onAppend = onAppendToExisting,
+            onCreateNew = onCreateNewPlant,
+            onDismiss = { /* 必须二选一，不允许点外部关掉 */ },
+        )
+    }
 
     Scaffold(
         modifier = modifier,
@@ -630,6 +647,86 @@ private fun PipelineSummaryCard(response: VisionResponse) {
  *  - 已保存无分析 → 明确写出「基础识别结果不受影响」，避免用户以为白识别了
  */
 @Composable
+private fun MergeDecisionDialog(
+    suggestion: MergeSuggestion,
+    onAppend: () -> Unit,
+    onCreateNew: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val plant = suggestion.plant ?: return
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                if (suggestion.level == MergeLevel.EXACT) {
+                    "可能已记录过这种植物"
+                } else {
+                    "是否与已有植物是同一种？"
+                },
+            )
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = "本次识别：${plant.name}" +
+                        (plant.latinName?.let { "（$it）" } ?: ""),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Text(
+                    text = "已有档案：${plant.name}" +
+                        (plant.latinName?.let { "（$it）" } ?: ""),
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                )
+                plant.family?.let { family ->
+                    Text(
+                        text = "科：$family" + (plant.genus?.let { "　属：$it" } ?: ""),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Text(
+                    text = "判断依据：${suggestion.reason}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text = "该档案已有 ${suggestion.observationCount} 次观察，" +
+                        "添加后将是第 ${suggestion.nextObservationNumber} 次。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (suggestion.level == MergeLevel.POSSIBLE) {
+                    Text(
+                        text = "证据不够充分，请结合实地观察确认 —— " +
+                            "系统不会替你决定这是不是同一株。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.tertiary,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = onAppend) { Text("添加到已有植物") }
+        },
+        dismissButton = {
+            OutlinedButton(onClick = onCreateNew) { Text("创建新的植物") }
+        },
+    )
+}
+
+/**
+ * 保存状态栏。
+ *
+ * 覆盖五种情况（规格书第十六、三十节）：
+ *  - 未保存 → 引导保存
+ *  - 等待归并决策 → 说明正在等用户选择
+ *  - 保存中 → 进度
+ *  - 已保存有分析 → 查看详情 / 重新生成
+ *  - 已保存无分析 → 明确写出「基础识别结果不受影响」，避免用户以为白识别了
+ */
+@Composable
 private fun SaveBar(
     saveState: SaveState,
     onSave: () -> Unit,
@@ -669,6 +766,34 @@ private fun SaveBar(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                }
+
+                is SaveState.AwaitingMergeDecision -> {
+                    Text(
+                        text = "找到可能相同的已有植物，请在对话框中选择。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+
+                is SaveState.SavedToExistingObservation -> {
+                    Text(
+                        text = "已更新这条观察的识别结果",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    Text(
+                        text = "没有新建观察 —— 观察次数保持不变。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Button(
+                        onClick = { onOpenPlantDetail(saveState.plantId) },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("查看植物档案")
+                    }
                 }
 
                 is SaveState.SavedWithAnalysis -> {

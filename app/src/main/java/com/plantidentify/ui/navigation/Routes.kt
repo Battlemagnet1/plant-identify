@@ -39,10 +39,20 @@ object Routes {
     /** 植物详情 */
     const val PLANT_DETAIL = "plant_detail/{$ARG_PLANT_ID}"
 
+    /** 编辑植物档案（Phase 5）：只开放人工可编辑字段 */
+    const val PLANT_EDIT = "plant_edit/{$ARG_PLANT_ID}"
+
     /** 单次观察详情 */
     const val OBSERVATION = "observation/{$ARG_OBSERVATION_ID}"
 
+    /** 某株植物的全部观察（Phase 5） */
+    const val PLANT_OBSERVATIONS = "plant_observations/{$ARG_PLANT_ID}"
+
     fun plantDetail(plantId: Long): String = "plant_detail/$plantId"
+
+    fun plantEdit(plantId: Long): String = "plant_edit/$plantId"
+
+    fun plantObservations(plantId: Long): String = "plant_observations/$plantId"
 
     fun observation(observationId: Long): String = "observation/$observationId"
 

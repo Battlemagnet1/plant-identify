@@ -66,6 +66,24 @@ interface ObservationImageDao {
     @Query("SELECT * FROM observation_image")
     suspend fun getAll(): List<ObservationImageEntity>
 
+    /**
+     * 某株植物全部观察的 id。
+     *
+     * 删除植物时要先把每条观察的图片行删掉，再删观察行。
+     */
+    @Query("SELECT id FROM plant_observation WHERE plantId = :plantId")
+    suspend fun getObservationIdsForPlant(plantId: Long): List<Long>
+
+    /**
+     * 某个图片路径还被多少行引用。
+     *
+     * 删除文件前必须先问一句 —— 同一张图可能被多条观察共享
+     * （例如把同一批草稿照片保存到了两个档案），
+     * 引用计数不为 0 时删文件会让其它档案的照片变成空白。
+     */
+    @Query("SELECT COUNT(*) FROM observation_image WHERE imagePath = :imagePath")
+    suspend fun countByPath(imagePath: String): Int
+
     // ---------- 统计 ----------
 
     /** 照片数 = observation_image 行数 */

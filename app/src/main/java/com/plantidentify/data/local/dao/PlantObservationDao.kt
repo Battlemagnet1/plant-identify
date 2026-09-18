@@ -27,6 +27,10 @@ interface PlantObservationDao {
     @Query("DELETE FROM plant_observation WHERE id = :observationId")
     suspend fun deleteById(observationId: Long)
 
+    /** 删除某株植物的全部观察（删植物时调用；图片行由调用方先处理） */
+    @Query("DELETE FROM plant_observation WHERE plantId = :plantId")
+    suspend fun deleteByPlant(plantId: Long)
+
     // ---------- 读取 ----------
 
     @Query("SELECT * FROM plant_observation WHERE plantId = :plantId ORDER BY timestamp DESC")

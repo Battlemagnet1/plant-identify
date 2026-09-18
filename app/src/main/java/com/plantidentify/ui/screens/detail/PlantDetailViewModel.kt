@@ -6,9 +6,11 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.plantidentify.data.ai.AiSettingsStore
+import com.plantidentify.data.ai.RecognitionResult
 import com.plantidentify.data.ai.TextAnalysisRequest
 import com.plantidentify.data.ai.TextAnalysisResult
 import com.plantidentify.data.ai.TextProvider
+import com.plantidentify.data.ai.TolerantJsonParser
 import com.plantidentify.data.local.entity.AnalysisStatus
 import com.plantidentify.data.local.relation.PlantWithObservationsAndImages
 import com.plantidentify.data.repository.PlantRepository
@@ -16,6 +18,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -52,6 +55,62 @@ class PlantDetailViewModel(
 
     private val _message = MutableStateFlow<String?>(null)
     val message: StateFlow<String?> = _message.asStateFlow()
+
+    private val _deleted = MutableStateFlow(false)
+
+    /** 删除已完成 —— 页面据此返回上一级 */
+    val deleted: StateFlow<Boolean> = _deleted.asStateFlow()
+
+    /**
+     * 相似植物（来自最近一次识别结果里模型的候选）。
+     *
+     * 不做成数据库字段：它是**识别过程的产物**，只对最近一次识别有意义，
+     * 而原始 JSON 已经完整存在 observation.aiResultJson 里。
+     * 再加一列只会多一份可能与原始记录不一致的副本。
+     */
+    val alternatives: StateFlow<List<RecognitionResult.Alternative>> =
+        repository.observePlantDetail(plantId)
+            .map { detail ->
+                // observations 的元素是 ObservationWithImages（观察 + 它的图片），
+                // 实体本身要再往里取一层
+                val observations = detail?.observations.orEmpty()
+                val raw = (observations.firstOrNull { it.observation.isPrimary }
+                    ?: observations.firstOrNull())
+                    ?.observation
+                    ?.aiResultJson
+                if (raw.isNullOrBlank()) {
+                    emptyList()
+                } else {
+                    when (val attempt = TolerantJsonParser.parse(raw)) {
+                        is TolerantJsonParser.ParseAttempt.Success ->
+                            attempt.result.alternatives
+                        is TolerantJsonParser.ParseAttempt.Degraded ->
+                            attempt.result.alternatives
+                        is TolerantJsonParser.ParseAttempt.Failed -> emptyList()
+                    }
+                }
+            }
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
+                initialValue = emptyList(),
+            )
+
+    /**
+     * 删除整份档案。
+     *
+     * 连带删除全部观察、图片行，以及**图片文件** —— 数据库级联不等于文件级联，
+     * 文件不删就会永远占着存储（规格书把这条列为本 Phase 的主要风险之一）。
+     */
+    fun deletePlant() {
+        viewModelScope.launch {
+            repository.deletePlant(plantId)
+                .onSuccess { _deleted.value = true }
+                .onFailure { error ->
+                    _message.value = error.message ?: "删除失败，请重试"
+                }
+        }
+    }
 
     /** 重新生成植物百科（用于分析失败后重试，或换了文字模型后重写） */
     fun regenerateAnalysis() {

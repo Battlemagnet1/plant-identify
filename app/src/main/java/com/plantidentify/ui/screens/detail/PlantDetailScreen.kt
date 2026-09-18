@@ -14,6 +14,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -27,12 +28,15 @@ import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -42,12 +46,16 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.plantidentify.data.ai.RecognitionResult
 import com.plantidentify.data.local.entity.AnalysisStatus
 import com.plantidentify.data.local.entity.PlantRecordEntity
 import com.plantidentify.data.storage.ImageStore
 import com.plantidentify.domain.model.ConfidenceGrade
 import com.plantidentify.ui.components.BackIconButton
 import com.plantidentify.ui.components.LocalImage
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlin.math.roundToInt
 
 /**
@@ -73,13 +81,19 @@ fun PlantDetailScreen(
     imageStore: ImageStore,
     viewModel: PlantDetailViewModel,
     onBack: () -> Unit,
+    onEdit: (Long) -> Unit,
+    onOpenObservations: (Long) -> Unit,
+    onDeleted: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val detail by viewModel.detail.collectAsStateWithLifecycle()
     val analyzing by viewModel.analyzing.collectAsStateWithLifecycle()
     val message by viewModel.message.collectAsStateWithLifecycle()
+    val alternatives by viewModel.alternatives.collectAsStateWithLifecycle()
+    val deleted by viewModel.deleted.collectAsStateWithLifecycle()
 
     val snackbarHostState = remember { SnackbarHostState() }
+    var confirmDelete by remember { mutableStateOf(false) }
 
     LaunchedEffect(message) {
         message?.let {
@@ -88,12 +102,55 @@ fun PlantDetailScreen(
         }
     }
 
+    // 档案已删除 → 直接退回上一级，避免停留在一个永远显示「档案不存在」的页面
+    LaunchedEffect(deleted) {
+        if (deleted) onDeleted()
+    }
+
+    if (confirmDelete) {
+        val observationCount = detail?.observations?.size ?: 0
+        val photoCount = detail?.observations.orEmpty().sumOf { it.images.size }
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text("删除这份植物档案？") },
+            text = {
+                Text(
+                    "将同时删除 $observationCount 次观察、$photoCount 张照片，无法撤销。\n\n" +
+                        "如果只是不想再看到它，暂时没有「归档」功能 —— " +
+                        "这一点如实说明，删除就是真的删除。",
+                )
+            },
+            // 确认按钮刻意不叫「删除」：顶栏那个也写着「删除」，
+            // 两个同名按钮同屏会让用户（和自动化脚本）点错。
+            // 破坏性操作的按钮本来就该把动作写全。
+            confirmButton = {
+                Button(
+                    onClick = {
+                        confirmDelete = false
+                        viewModel.deletePlant()
+                    },
+                ) { Text("确认删除") }
+            },
+            dismissButton = {
+                OutlinedButton(onClick = { confirmDelete = false }) { Text("取消") }
+            },
+        )
+    }
+
     Scaffold(
         modifier = modifier,
         topBar = {
             TopAppBar(
                 title = { Text(detail?.plant?.name ?: "植物档案") },
                 navigationIcon = { BackIconButton(onClick = onBack) },
+                actions = {
+                    detail?.plant?.let { plant ->
+                        TextButton(onClick = { onEdit(plant.id) }) { Text("编辑") }
+                        TextButton(onClick = { confirmDelete = true }) {
+                            Text("删除", color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surface,
                 ),
@@ -149,6 +206,22 @@ fun PlantDetailScreen(
             }
 
             item { AnalysisSection(plant = plant, analyzing = analyzing, onRegenerate = viewModel::regenerateAnalysis) }
+
+            // 相似植物：来自最近一次识别时模型给出的候选。
+            // 放在百科之后、观察记录之前 —— 它是「还有可能是别的什么」的提示，
+            // 应该紧挨着识别结论，而不是压在页面最底部
+            if (alternatives.isNotEmpty()) {
+                item { AlternativesCard(alternatives) }
+            }
+
+            item {
+                ObservationSummaryCard(
+                    plantId = plant.id,
+                    observations = detail?.observations.orEmpty(),
+                    imageStore = imageStore,
+                    onOpenObservations = onOpenObservations,
+                )
+            }
 
             item { DisclaimerCard() }
 
@@ -420,6 +493,118 @@ private fun AnalysisSection(
 }
 
 /** 免责声明（规格书第三十一节） */
+/**
+ * 相似植物（规格书第十六节的「相似植物」区块）。
+ *
+ * 数据来自最近一次识别时模型给出的候选，不是另做一次检索 ——
+ * 那会再产生一次 API 调用，而且结论可能与已有的识别结果不一致。
+ */
+@Composable
+private fun AlternativesCard(alternatives: List<RecognitionResult.Alternative>) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "相似植物",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Medium,
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "识别时模型认为也可能的物种，供你对照实地特征判断。",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(10.dp))
+            alternatives.forEach { alternative ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 3.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text(
+                        text = alternative.name,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Text(
+                        text = "${(alternative.confidence * 100).roundToInt()}%",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 观察记录摘要（规格书第十六节：首次观察 / 观察次数 / 查看所有观察）。
+ *
+ * 只给摘要与入口，具体列表在观察记录页 ——
+ * 详情页已经有百科等长内容，把观察逐条铺开会让页面失控地长。
+ */
+@Composable
+private fun ObservationSummaryCard(
+    plantId: Long,
+    observations: List<com.plantidentify.data.local.relation.ObservationWithImages>,
+    imageStore: ImageStore,
+    onOpenObservations: (Long) -> Unit,
+) {
+    val firstAt = observations.minOfOrNull { it.observation.timestamp }
+    val latestAt = observations.maxOfOrNull { it.observation.timestamp }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "观察记录",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Medium,
+            )
+            Spacer(Modifier.height(8.dp))
+
+            SummaryRow("首次观察", firstAt?.let { formatDate(it) } ?: "—")
+            SummaryRow("最近观察", latestAt?.let { formatDate(it) } ?: "—")
+            SummaryRow("观察次数", observations.size.toString())
+            SummaryRow("照片总数", observations.sumOf { it.images.size }.toString())
+
+            Spacer(Modifier.height(12.dp))
+            Button(
+                onClick = { onOpenObservations(plantId) },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("查看所有观察")
+            }
+        }
+    }
+}
+
+@Composable
+private fun SummaryRow(label: String, value: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 3.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(text = value, style = MaterialTheme.typography.bodySmall)
+    }
+}
+
+/** 日期格式化：观察记录只看年月日，时分秒对用户没有意义 */
+private fun formatDate(timestamp: Long): String =
+    SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date(timestamp))
+
 @Composable
 private fun DisclaimerCard() {
     Card(

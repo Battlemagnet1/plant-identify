@@ -30,7 +30,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.plantidentify.BuildConfig
+import com.plantidentify.data.storage.ImageStore
 import com.plantidentify.domain.model.PlantStatistics
+import com.plantidentify.ui.screens.plants.PlantCard
 
 /**
  * 首页（规格书第十五节）。
@@ -47,10 +49,12 @@ fun HomeScreen(
     onOpenPlantDetail: (Long) -> Unit,
     onOpenObservation: (Long) -> Unit,
     onOpenRecognition: () -> Unit,
+    imageStore: ImageStore,
     viewModel: HomeViewModel,
     modifier: Modifier = Modifier,
 ) {
     val statistics by viewModel.statistics.collectAsStateWithLifecycle()
+    val cards by viewModel.cards.collectAsStateWithLifecycle()
 
     Scaffold(
         modifier = modifier,
@@ -103,22 +107,34 @@ fun HomeScreen(
 
             StatisticsCard(statistics)
 
-            SectionTitle("植物档案")
+            SectionTitle(
+                if (cards.isEmpty()) "植物档案" else "植物档案（${cards.size}）",
+            )
 
-            EmptyArchiveCard()
+            if (cards.isEmpty()) {
+                EmptyArchiveCard()
+            } else {
+                cards.forEach { card ->
+                    PlantCard(
+                        card = card,
+                        imageStore = imageStore,
+                        onClick = { onOpenPlantDetail(card.plantId) },
+                    )
+                }
+            }
 
             // 仅 debug 构建可见的骨架自检入口。
-            // Phase 1 还没有档案列表、也没有识别流程，植物详情 / 观察记录 / 识别结果
-            // 三个页面无从进入，而验收标准要求 7 个页面都能跳转 —— 这里提供临时入口，
-            // 后续 Phase 有真实入口后即移除。
-            if (BuildConfig.DEBUG) {
+            // 这几个页面在 Phase 5 已有真实入口，这张卡只是为了在数据为空时
+            // 仍能进去看看页面结构，因此排在最后且不做强调。
+            if (BuildConfig.DEBUG && cards.isEmpty()) {
                 SkeletonSelfCheckCard(
                     onOpenPlantDetail = { onOpenPlantDetail(1L) },
                     onOpenObservation = { onOpenObservation(1L) },
                     onOpenRecognition = onOpenRecognition,
                 )
-                Spacer(Modifier.height(80.dp))
             }
+
+            Spacer(Modifier.height(80.dp))
         }
     }
 }

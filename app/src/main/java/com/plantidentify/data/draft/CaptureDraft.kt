@@ -36,6 +36,19 @@ data class DraftImage(
  */
 data class CaptureDraft(
     val images: List<DraftImage> = emptyList(),
+
+    /**
+     * 本轮照片要写回的**已有观察** id（仅「对已有观察补图并重新识别」时非空）。
+     *
+     * 规格书第十四点五节把两种情况分得很清楚：
+     * - 新的识别 → 新建 Observation（或归并到已有植物下新建 Observation）
+     * - 对**当前观察**补图重新识别 → **更新**这条 Observation，不新建
+     *
+     * 用草稿携带这个 id，而不是走导航参数，理由是：它是「这批照片属于谁」的属性，
+     * 与照片同生共死。走导航参数的话，一旦用户中途离开再回来（或进程被回收），
+     * 「这批照片要写回哪里」就丢了，只能再问用户一遍。
+     */
+    val targetObservationId: Long? = null,
 ) {
     val count: Int get() = images.size
 
@@ -45,6 +58,9 @@ data class CaptureDraft(
 
     /** 还能再加几张 */
     val remainingSlots: Int get() = (MAX_IMAGES - count).coerceAtLeast(0)
+
+    /** 本轮是否在给已有观察补图 */
+    val isReanalysis: Boolean get() = targetObservationId != null
 
     companion object {
         /**
