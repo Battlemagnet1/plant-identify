@@ -8,6 +8,27 @@
 
 ------
 
+> **修订记录（2026-09-18）**
+>
+> 以下四处命名与统计口径已经确认修订，实现时**以修订后的为准**：
+>
+> 1. **表名与类名统一**：`PlantRecord` / `PlantObservation` / `ObservationImage`；
+>    页面为 `AddPlantScreen` / `PlantDetailScreen`。
+>    （原文 `planttRecord`、`planttObservation`、`AddplanttScreen`、`planttDetailScreen`
+>    为笔误，双 t 且大小写不一致）
+> 2. **统计口径**：弃用「植物记录」这一含混表述，统一为三项 ——
+>    **不同植物**（= `PlantRecord` 数）、**观察次数**（= `PlantObservation` 数）、
+>    **照片数**（= `ObservationImage` 数）。
+> 3. **MVP 边界**：第一版包含第十五至二十二节的完整功能，即含位置、统计、
+>    HTML 导出、数据备份（对应开发 Phase 6 全做）。
+> 4. **首版 AI 通道**：预置 Qwen / 豆包 / OpenAI 三家的默认配置；
+>    Pl@ntNet 暂仅用作识别效果验证的对照基准，是否常驻为兜底通道待验证后再定。
+>
+> 本次修订的完整分析与依据见同目录
+> `Plant Identify - 开发计划与可行性分析.md`。
+
+------
+
 # 一、项目定位
 
 plant Identify 是一个面向：
@@ -607,7 +628,7 @@ JPEG 质量约 75～85。
 推荐：
 
 ```text
-planttRecord
+PlantRecord
 ```
 
 保存植物主体：
@@ -635,14 +656,14 @@ note
 然后：
 
 ```text
-planttObservation
+PlantObservation
 ```
 
 保存每一次观察：
 
 ```text
 id
-planttId
+plantId
 timestamp
 latitude
 longitude
@@ -668,7 +689,7 @@ sortOrder
 关系：
 
 ```text
-planttRecord
+PlantRecord
    │
    ├── Observation 1
    │       ├── Image 1
@@ -691,17 +712,17 @@ planttRecord
 
 **重复植物和重复观察必须区分：**
 
-- `planttRecord`：代表一种长期保存的植物档案
-- `planttObservation`：代表用户某一次对该植物的观察/识别
+- `PlantRecord`：代表一种长期保存的植物档案
+- `PlantObservation`：代表用户某一次对该植物的观察/识别
 
 例如用户第一次识别桂花时创建：
 
 ```text
-planttRecord #001 桂花
+PlantRecord #001 桂花
 └── Observation #001
 ```
 
-之后再次拍摄桂花，不应直接创建新的 planttRecord，而应该提示用户是否将此次识别作为新的 Observation 添加到已有植物档案。
+之后再次拍摄桂花，不应直接创建新的 PlantRecord，而应该提示用户是否将此次识别作为新的 Observation 添加到已有植物档案。
 
 ### 重复判断流程
 
@@ -710,7 +731,7 @@ AI完成植物识别
         ↓
 获取植物名称、拉丁学名、科、属
         ↓
-查询本地 planttRecord
+查询本地 PlantRecord
         ↓
 匹配已有植物
         ↓
@@ -764,7 +785,7 @@ Osmanthus fragrans
 当前识别结果与已有记录存在一定相似性，请确认。
 ```
 
-必须由用户决定是否归入已有 planttRecord。
+必须由用户决定是否归入已有 PlantRecord。
 
 #### 无匹配
 
@@ -774,16 +795,16 @@ Osmanthus fragrans
 
 ### 重要原则
 
-AI不得未经用户确认直接合并两个已有 planttRecord。
+AI不得未经用户确认直接合并两个已有 PlantRecord。
 
 系统可以自动推荐“可能是已有植物”，但最终归并操作由用户确认。
 
 如果用户选择“添加到已有植物”，则：
 
 ```text
-已有 planttRecord
+已有 PlantRecord
         ↓
-创建新的 planttObservation
+创建新的 PlantObservation
         ↓
 保存本次识别结果和全部照片
 ```
@@ -810,7 +831,7 @@ Observation #001
 最终数据库应支持：
 
 ```text
-planttRecord
+PlantRecord
 ├── Observation 1
 │   ├── Image 1
 │   ├── Image 2
@@ -853,10 +874,11 @@ v1.0.0
 然后：
 
 ```text
-植物记录
+植物档案
 
-已记录植物：127
 不同植物：83
+观察次数：156
+照片数：247
 ```
 
 下面使用卡片。
@@ -1090,14 +1112,14 @@ Lagerstroemia indica
 ```text
 植物统计
 
-植物记录：
-127
-
 不同植物：
 83
 
 观察次数：
 156
+
+照片数：
+247
 
 科：
 42
@@ -1109,7 +1131,7 @@ Lagerstroemia indica
 统计必须准确区分：
 
 ```text
-植物记录
+观察次数
 ```
 
 和：
@@ -1120,11 +1142,12 @@ Lagerstroemia indica
 
 例如：
 
-同一种紫薇观察3次：
+同一种紫薇观察 3 次，每次各拍 2 张照片：
 
 ```text
-植物记录：3
+观察次数：3
 不同植物：1
+照片数：6
 ```
 
 ------
@@ -1156,11 +1179,14 @@ plant Identify
 生成时间
 2026-09-18
 
-植物记录
-127
-
 不同植物
 83
+
+观察次数
+156
+
+照片数
+247
 
 ────────────────
 
@@ -1373,13 +1399,13 @@ MainActivity
      ↓
 HomeScreen
      │
-     ├── AddplanttScreen
+     ├── AddPlantScreen
      │      ├── Camera
      │      └── Gallery
      │
      ├── RecognitionScreen
      │
-     ├── planttDetailScreen
+     ├── PlantDetailScreen
      │
      ├── ObservationScreen
      │
@@ -1495,9 +1521,9 @@ Text Provider
         ↓
 生成植物详细分析
         ↓
-保存 planttRecord
+保存 PlantRecord
         ↓
-保存 planttObservation
+保存 PlantObservation
         ↓
 保存图片
         ↓
@@ -1591,8 +1617,8 @@ Pl@ntNet
 - 首页
 - Navigation
 - Room
-- planttRecord
-- planttObservation
+- PlantRecord
+- PlantObservation
 - ObservationImage
 
 确保可以编译运行。
