@@ -73,17 +73,37 @@ sealed interface VisionCallResult {
 sealed interface ConnectivityResult {
 
     /**
+     * 连接正常，且该模型接受了图片输入。
+     *
      * @param model 服务端回显的模型名（可能与我们请求的一致，也可能是别名）
      * @param latencyMs 往返耗时
      */
     data class Success(
         val model: String,
         val latencyMs: Long,
-        val acceptsImages: Boolean,
+        val acceptsImages: Boolean = true,
     ) : ConnectivityResult
 
     /**
-     * 连接可用但图片不被接受 —— 说明配的是纯文本模型。
+     * 连接正常，但**图片输入没能验证通过**。
+     *
+     * 存在的意义：测试连接的首要目的是验证「地址对不对、Key 有效吗、
+     * 模型名存在吗」，图片支持只是附加项。若因为探针图本身不被服务端接受
+     * 就报「连接失败」，用户会去反复核对一个其实完全正确的配置 ——
+     * 这正是一次真实事故的成因（1×1 探针图被 Qwen-VL 的 min_pixels 规则拒绝）。
+     *
+     * 因此带图请求遇到「参数/图片类」错误时，会自动降级为纯文本请求重试；
+     * 纯文本若能通，就归到本状态而不是 [Failure]。
+     */
+    data class ImageUnverified(
+        val model: String,
+        val latencyMs: Long,
+        /** 带图请求失败时服务端给的说明，已脱敏 */
+        val reason: String? = null,
+    ) : ConnectivityResult
+
+    /**
+     * 连接正常，但该模型不接受图片输入 —— 说明配成了纯文本模型。
      * 单列一类是因为这是配置错误里最常见的一种，值得明确提示。
      */
     data class TextOnlyModel(val model: String) : ConnectivityResult

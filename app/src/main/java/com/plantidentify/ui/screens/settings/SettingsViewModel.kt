@@ -151,6 +151,12 @@ class SettingsViewModel(
                         latencyMs = result.latencyMs,
                     )
 
+                    is ConnectivityResult.ImageUnverified -> TestOutcome.ImageUnverified(
+                        model = result.model,
+                        latencyMs = result.latencyMs,
+                        reason = result.reason,
+                    )
+
                     is ConnectivityResult.TextOnlyModel -> TestOutcome.TextOnly(result.model)
 
                     is ConnectivityResult.Failure -> TestOutcome.Failed(
@@ -221,11 +227,24 @@ class SettingsViewModel(
     }
 }
 
-/** 测试连接的结果，直接对应 UI 上的三态展示 */
+/** 测试连接的结果，直接对应 UI 上的四态展示 */
 sealed interface TestOutcome {
 
     /** 连接正常且模型接受图片 */
     data class Success(val model: String, val latencyMs: Long) : TestOutcome
+
+    /**
+     * 连接正常，但图片没验上。
+     *
+     * 与「连接失败」必须区分开：地址、Key、模型名都是对的，
+     * 只是探针图被服务端的参数校验挡了（各家最小尺寸要求不同）。
+     * 报成失败会让人去反复核对一个其实正确的配置。
+     */
+    data class ImageUnverified(
+        val model: String,
+        val latencyMs: Long,
+        val reason: String?,
+    ) : TestOutcome
 
     /** 连接正常，但该模型不接受图片输入 —— 配成了纯文本模型 */
     data class TextOnly(val model: String) : TestOutcome

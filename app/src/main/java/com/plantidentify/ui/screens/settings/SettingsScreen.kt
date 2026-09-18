@@ -343,6 +343,8 @@ private fun TestConnectionSection(
             val (container, content) = when (result) {
                 is TestOutcome.Success -> MaterialTheme.colorScheme.primaryContainer to
                     MaterialTheme.colorScheme.onPrimaryContainer
+                is TestOutcome.ImageUnverified -> MaterialTheme.colorScheme.tertiaryContainer to
+                    MaterialTheme.colorScheme.onTertiaryContainer
                 is TestOutcome.TextOnly -> MaterialTheme.colorScheme.tertiaryContainer to
                     MaterialTheme.colorScheme.onTertiaryContainer
                 is TestOutcome.Failed -> MaterialTheme.colorScheme.errorContainer to
@@ -370,6 +372,38 @@ private fun TestConnectionSection(
                                 style = MaterialTheme.typography.bodySmall,
                                 color = content,
                             )
+                        }
+
+                        is TestOutcome.ImageUnverified -> {
+                            Text(
+                                text = "连接正常（图片未验证）",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Medium,
+                                color = content,
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                text = "模型 ${result.model} 可以正常访问，往返 ${result.latencyMs} ms。" +
+                                    "但带图片的测试请求被服务端拒绝了。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = content,
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                text = "这通常不是配置错误 —— 各家服务对图片的最小尺寸要求不同" +
+                                    "（阿里云百炼要求宽高均大于 10 像素且像素数不低于 4096）。" +
+                                    "实际识别用的是 1536px 照片，一般不受影响，可以直接试一次识别。",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = content,
+                            )
+                            result.reason?.let { reason ->
+                                Spacer(Modifier.height(6.dp))
+                                Text(
+                                    text = "服务返回：$reason",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = content,
+                                )
+                            }
                         }
 
                         is TestOutcome.TextOnly -> {

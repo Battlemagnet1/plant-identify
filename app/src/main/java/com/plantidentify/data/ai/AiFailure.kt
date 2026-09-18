@@ -127,8 +127,9 @@ sealed class AiFailure(
 
     /** 400 且与模型无关：多半是请求格式或图片不被接受 */
     class BadRequest(detail: String?) : AiFailure(
-        userMessage = "请求被服务拒绝，模型可能不支持当前图片格式或数量",
-        fixHint = "可尝试减少图片数量，或换一张格式常见的照片（JPEG / PNG）",
+        userMessage = "请求被服务拒绝，服务端认为参数不符合要求",
+        fixHint = "常见原因：图片尺寸不符合模型要求、图片格式不被支持、或图片数量超出上限。" +
+            "可尝试减少照片数量，或换一张常见格式（JPEG / PNG）的照片",
         canRetry = false,
         serverDetail = detail,
     )
@@ -192,28 +193,46 @@ sealed class AiFailure(
         /**
          * 从服务端错误响应中提取可读细节。
          *
-         * 兼容三种常见结构：
-         *  - `{"error": {"message": "..."}}` —— OpenAI 及多数兼容实现
-         *  - `{"message": "..."}` —— 部分国内服务
-         *  - `{"error": "..."}` —— 简单实现
+         * 兼容四种常见结构：
+         *  - `{"error": {"code": "...", "message": "..."}}` —— OpenAI 及多数兼容实现
+         *  - `{"code": "...", "message": "..."}` —— 部分国内服务（DashScope 系）
+         *  - `{"message": "..."}` —— 简单实现
+         *  - `{"error": "..."}` —— 更简单的实现
+         *
+         * **同时保留 code**：像阿里云百炼这类服务，message 可能只有一句
+         * `<400> InternalError.Algo.InvalidParameter`，光看它无法定位问题；
+         * 而 code 里的 `InvalidParameter` 至少指明了「参数层面」这个方向。
          *
          * @param apiKey 用于脱敏：若服务端把请求内容回显进错误信息，
          *               Key 可能被夹带出来，一律替换掉。
          */
         fun extractDetail(body: String?, apiKey: String? = null): String? {
             if (body.isNullOrBlank()) return null
+
             val raw = runCatching {
                 val json = org.json.JSONObject(body)
-                when {
-                    json.optJSONObject("error") != null ->
-                        json.getJSONObject("error").optString("message").ifBlank { null }
-                    json.optString("message").isNotBlank() -> json.optString("message")
-                    json.optString("error").isNotBlank() -> json.optString("error")
-                    else -> null
-                }
+
+                json.optJSONObject("error")
+                    ?.let { err -> combine(err.optString("message"), err.optString("code")) }
+                    ?.let { return@runCatching it }
+
+                combine(json.optString("message"), json.optString("code"))
+                    ?: json.optString("error").takeIf { it.isNotBlank() }
             }.getOrNull() ?: body
 
             return sanitize(raw, apiKey)
+        }
+
+        /** 把 message 与 code 合成一句可读文本，两者相同或缺失时自动退化 */
+        private fun combine(message: String?, code: String?): String? {
+            val msg = message?.trim().orEmpty()
+            val cd = code?.trim().orEmpty()
+            return when {
+                msg.isNotEmpty() && cd.isNotEmpty() && !msg.contains(cd) -> "$msg（code: $cd）"
+                msg.isNotEmpty() -> msg
+                cd.isNotEmpty() -> cd
+                else -> null
+            }
         }
 
         /**

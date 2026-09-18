@@ -375,6 +375,52 @@ def main() -> int:
             "明文 Key 被写进了 DataStore",
         )
 
+        # ---------------- 1.1 测试连接的降级行为
+        #
+        # 真实事故：探针图曾是 1×1 像素，而阿里云百炼要求「宽高均 > 10 像素、
+        # 像素数 ≥ 4096」，于是「测试连接」对一个完全正确的配置报「连接失败」，
+        # 而实际识别又完全正常。
+        #
+        # 修法是两层：探针图改成 256×256（= 65536 像素，满足最严的一档）；
+        # 并且带图请求若被参数校验拒绝，自动改用纯文本重试 ——
+        # 纯文本能通就报「连接正常（图片未验证）」而不是「连接失败」。
+        print("\n[1.1] 测试连接的降级行为")
+        set_mode("400params")
+        reset_log()
+        scroll_up(3)
+        reqs: dict = {}
+        if scroll_to("测试连接", exact=True):
+            tap_text("测试连接", exact=True, timeout=8)
+            hit = None
+            deadline = time.time() + 40
+            while time.time() < deadline:
+                if "连接正常（图片未验证）" in screen_text():
+                    hit = "连接正常（图片未验证）"
+                    break
+                scroll_down(1)
+                time.sleep(0.9)
+            check("参数被拒时报「连接正常（图片未验证）」而非「连接失败」", hit is not None)
+
+            with urllib.request.urlopen(f"{MOCK}/requests", timeout=10) as resp:
+                reqs = json.loads(resp.read().decode("utf-8"))
+            check(
+                "确实降级重试了（带图失败 → 纯文本成功，共 2 次请求）",
+                reqs.get("count") == 2,
+                f"实际 {reqs.get('count')} 次",
+            )
+        else:
+            check("参数被拒时报「连接正常（图片未验证）」而非「连接失败」", False, "未找到测试连接按钮")
+
+        # 探针图必须大于 1×1（1×1 的 base64 仅约 114 字节）
+        if reqs.get("requests"):
+            check(
+                "探针图尺寸合规（不再是 1×1）",
+                reqs["requests"][0].get("image_bytes", 0) > 300,
+                f"实际 {reqs['requests'][0].get('image_bytes')} 字节",
+            )
+
+        set_mode("ok")
+
     # ---------------- 2. 走到结果页
     print("\n[2] 端到端识别")
     if not goto_result_page():

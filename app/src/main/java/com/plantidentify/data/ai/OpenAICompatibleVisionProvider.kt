@@ -1,5 +1,9 @@
 package com.plantidentify.data.ai
 
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
 import android.util.Base64
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
@@ -14,6 +18,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.net.ConnectException
 import java.net.SocketTimeoutException
@@ -136,71 +141,118 @@ class OpenAICompatibleVisionProvider(
         return VisionCallResult.Failure(AiFailure.Unknown("重试后仍未获得可用的识别结果"))
     }
 
+    /**
+     * 测试连接。
+     *
+     * ## 两轮策略（第一轮失败会自动降级，这是必要的）
+     *
+     * 第一轮带一张探针图，顺带验证「这个模型接不接受图片」。
+     * 但如果服务端因**参数校验**拒绝（最常见的是图片尺寸不符合它的最小要求），
+     * 那说明问题在探针图而不在配置 —— 此时自动用纯文本再测一次：
+     *
+     * - 纯文本能通 → [ConnectivityResult.ImageUnverified]（配置是对的，图片没验上）
+     * - 纯文本也不通 → [ConnectivityResult.Failure]（确实有问题）
+     *
+     * 不这样做的后果很具体：曾经用 1×1 的探针图，在阿里云百炼上必然返回
+     * `InvalidParameter`（它要求宽高均 > 10 像素、像素数 ≥ 4096），
+     * 于是「测试连接」对一个完全正确的配置报「连接失败」，
+     * 而实际识别又正常 —— 用户只能陷入困惑。
+     */
     override suspend fun testConnection(request: ConnectivityRequest): ConnectivityResult {
         val config = request.config
         if (!config.isUsable) {
             return ConnectivityResult.Failure(AiFailure.NotConfigured(config.missingFields))
         }
 
-        // 带一张 1×1 的 PNG：请求体几乎为零，又能顺带验证该模型是否接受图片输入
+        val startedAt = System.currentTimeMillis()
+
+        return when (val outcome = postProbe(config, withImage = true)) {
+            is HttpOutcome.Ok -> ConnectivityResult.Success(
+                model = echoModelOf(outcome.rawBody, config.model),
+                latencyMs = System.currentTimeMillis() - startedAt,
+            )
+
+            is HttpOutcome.HttpError -> when {
+                // 服务端明确表示不接受图片 → 就是配成了纯文本模型
+                outcome.isImageRejection ->
+                    ConnectivityResult.TextOnlyModel(config.model)
+
+                // 400/422 的参数类拒绝 → 大概率是探针图不合规，去掉图片再试
+                outcome.failure is AiFailure.BadRequest ->
+                    retryWithoutImage(config, outcome.failure, startedAt)
+
+                else -> ConnectivityResult.Failure(outcome.failure)
+            }
+
+            is HttpOutcome.TransportError -> ConnectivityResult.Failure(outcome.failure)
+        }
+    }
+
+    /**
+     * 去掉图片再测一次。
+     *
+     * 用于「带图请求被参数校验拒绝」的情形 —— 此时地址、Key、模型名
+     * 很可能都是对的，只是探针图不符合该服务的最小尺寸规则。
+     */
+    private suspend fun retryWithoutImage(
+        config: AiEndpointConfig,
+        imageFailure: AiFailure,
+        startedAt: Long,
+    ): ConnectivityResult =
+        when (val outcome = postProbe(config, withImage = false)) {
+            is HttpOutcome.Ok -> ConnectivityResult.ImageUnverified(
+                model = echoModelOf(outcome.rawBody, config.model),
+                latencyMs = System.currentTimeMillis() - startedAt,
+                reason = imageFailure.serverDetail,
+            )
+
+            is HttpOutcome.HttpError -> ConnectivityResult.Failure(outcome.failure)
+            is HttpOutcome.TransportError -> ConnectivityResult.Failure(outcome.failure)
+        }
+
+    /** 构造最小请求。`withImage` 为 false 时是纯文本，用于降级重试 */
+    private suspend fun postProbe(
+        config: AiEndpointConfig,
+        withImage: Boolean,
+    ): HttpOutcome = withContext(Dispatchers.IO) {
+        val content = JSONArray().apply {
+            if (withImage) {
+                put(imagePart(probeDataUri))
+            }
+            put(
+                JSONObject()
+                    .put("type", "text")
+                    .put("text", PromptBuilder.buildConnectivityPrompt()),
+            )
+        }
+
         val body = JSONObject().apply {
             put("model", config.model)
             put("max_tokens", PROBE_MAX_TOKENS)
             put(
                 "messages",
                 JSONArray().put(
-                    JSONObject()
-                        .put("role", "user")
-                        .put(
-                            "content",
-                            JSONArray()
-                                .put(imagePart(PROBE_IMAGE_DATA_URI))
-                                .put(
-                                    JSONObject()
-                                        .put("type", "text")
-                                        .put("text", PromptBuilder.buildConnectivityPrompt()),
-                                ),
-                        ),
+                    JSONObject().put("role", "user").put("content", content),
                 ),
             )
         }
 
-        val startedAt = System.currentTimeMillis()
-
-        return when (val outcome = postChatCompletions(config, body.toString())) {
-            is HttpOutcome.Ok -> {
-                val echoModel = runCatching {
-                    JSONObject(outcome.rawBody).optString("model")
-                }.getOrNull().orEmpty().ifBlank { config.model }
-
-                val content = extractMessageContent(outcome.rawBody)
-                if (content == null) {
-                    ConnectivityResult.Success(
-                        model = echoModel,
-                        latencyMs = System.currentTimeMillis() - startedAt,
-                        acceptsImages = true,
-                    )
-                } else {
-                    // 拿到了回复就说明链路通畅；此处不再校验回复内容是否符合我们的模板
-                    ConnectivityResult.Success(
-                        model = echoModel,
-                        latencyMs = System.currentTimeMillis() - startedAt,
-                        acceptsImages = true,
-                    )
-                }
-            }
-
-            is HttpOutcome.HttpError ->
-                // 配成纯文本模型是最常见的配置失误，单列一类给出针对性提示
-                if (outcome.isImageRejection) {
-                    ConnectivityResult.TextOnlyModel(config.model)
-                } else {
-                    ConnectivityResult.Failure(outcome.failure)
-                }
-
-            is HttpOutcome.TransportError -> ConnectivityResult.Failure(outcome.failure)
-        }
+        postChatCompletions(config, body.toString())
     }
+
+    /**
+     * 探针图只生成一次。
+     *
+     * 用 `by lazy` 而不是每次现算：位图绘制 + PNG 编码 + base64 有几十毫秒开销，
+     * 而这个内容是固定的。放在 IO 线程生成（见 [postProbe]），不阻塞主线程。
+     */
+    private val probeDataUri: String by lazy { buildProbeImageDataUri() }
+
+    private fun echoModelOf(rawBody: String, fallback: String): String =
+        runCatching { JSONObject(rawBody).optString("model") }
+            .getOrNull()
+            .orEmpty()
+            .ifBlank { fallback }
 
     // ---------------- 请求构造与执行 ----------------
 
@@ -450,6 +502,55 @@ class OpenAICompatibleVisionProvider(
         }
     }
 
+    /**
+     * 生成测试连接用的探针图（data URI）。
+     *
+     * ## 为什么不能是一张 1×1 的小图
+     *
+     * 这是一次真实事故换来的结论。最初为了把请求体压到最小，硬编码了一张
+     * 1×1 的 PNG，结果在阿里云百炼上**必然**报
+     * `<400> InternalError.Algo.InvalidParameter`：
+     *
+     * - 官方限制「图像的宽度和高度均须大于 10 像素」—— 1×1 不满足
+     * - `min_pixels` 下限：qwen-vl-max / qwen-vl-plus 为 4096，
+     *   Qwen3-VL 系列为 65536 —— 1 像素差得更远
+     *
+     * 于是出现了一个荒谬的现象：实际识别完全正常，点「测试连接」却报失败。
+     *
+     * ## 为什么用程序生成而不是硬编码 base64
+     *
+     * 源码里塞一大段 base64 既难读也难改，而各家服务的最小尺寸要求还会变。
+     * 这里留一个可调整的 [PROBE_EDGE] 常量更实际。
+     *
+     * ## 为什么画图案而不是纯色
+     *
+     * 部分服务对完全空白的图有额外处理，画个简单方块更保险 —— 成本只有几十字节。
+     */
+    private fun buildProbeImageDataUri(): String {
+        val bitmap = Bitmap.createBitmap(PROBE_EDGE, PROBE_EDGE, Bitmap.Config.ARGB_8888)
+        try {
+            Canvas(bitmap).apply {
+                drawColor(PROBE_BACKGROUND)
+                val inset = PROBE_EDGE / 4f
+                drawRect(
+                    inset,
+                    inset,
+                    PROBE_EDGE - inset,
+                    PROBE_EDGE - inset,
+                    Paint().apply { color = PROBE_FOREGROUND },
+                )
+            }
+
+            val bytes = ByteArrayOutputStream().use { out ->
+                bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
+                out.toByteArray()
+            }
+            return "data:image/png;base64," + Base64.encodeToString(bytes, Base64.NO_WRAP)
+        } finally {
+            bitmap.recycle()
+        }
+    }
+
     private fun imagePart(dataUri: String): JSONObject = JSONObject()
         .put("type", "image_url")
         .put("image_url", JSONObject().put("url", dataUri))
@@ -490,14 +591,29 @@ class OpenAICompatibleVisionProvider(
         private const val MAX_ATTEMPTS = 2
 
         private const val MAX_OUTPUT_TOKENS = 2048
+        /**
+         * 测试连接用的探针图边长（像素）。
+         *
+         * 取 256 而不是更小的值，是被一次真实事故倒逼出来的：
+         * 最初用的是硬编码的 1×1 PNG，在阿里云百炼上**必然**返回
+         * `<400> InternalError.Algo.InvalidParameter` —— 官方限制是
+         * 「宽度和高度均须大于 10 像素」，且 qwen-vl-max / qwen-vl-plus 的
+         * `min_pixels` 下限为 4096、Qwen3-VL 系列为 65536。
+         *
+         * 256 × 256 = 65536，正好满足最严格的那一档，同时对 OpenAI、豆包
+         * 这些没有明确下限的服务也完全无害（纯色块 PNG 压缩后仅数百字节）。
+         */
+        private const val PROBE_EDGE = 256
+
         private const val PROBE_MAX_TOKENS = 64
+
+        /** 探针图的背景色与前景色 —— 用应用主题色，便于肉眼确认图片确实生成了 */
+        private val PROBE_BACKGROUND = Color.rgb(240, 248, 240)
+        private val PROBE_FOREGROUND = Color.rgb(46, 107, 50)
 
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
 
-        /** 1×1 像素的 PNG，用于「测试连接」时验证模型是否接受图片输入 */
-        private const val PROBE_IMAGE_DATA_URI =
-            "data:image/png;base64," +
-                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+        /** 测试连接用的探针图 —— 见 [probeImageDataUri] 的说明 */
 
         /**
          * 指向「模型名不存在」的短语。

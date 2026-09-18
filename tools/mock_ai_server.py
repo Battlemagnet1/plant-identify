@@ -43,6 +43,8 @@ App 侧配置：
     empty         content 为空字符串
     slow          延迟 3 秒再返回
     401 / 404 / 400model / 400image / 429 / 500   对应 HTTP 错误
+    params        仅带图请求报 400 InvalidParameter，纯文本请求正常
+                  （复刻阿里云百炼对过小图片的行为，用于验证测试连接的降级逻辑）
 
 ## 查看收到的请求
 
@@ -134,6 +136,7 @@ def build_content(mode: str) -> str:
 
 STATE = {"mode": "ok"}
 LAST_REQUEST: dict = {}
+ALL_REQUESTS: list = []
 LOCK = threading.Lock()
 
 
@@ -153,6 +156,12 @@ class MockHandler(BaseHTTPRequestHandler):
 
         if path == "/log":
             self._send_json(200, LAST_REQUEST or {"empty": True})
+            return
+
+        # 全部请求（用于验证「先带图失败、再纯文本重试」这类多步行为）
+        if path == "/requests":
+            with LOCK:
+                self._send_json(200, {"count": len(ALL_REQUESTS), "requests": list(ALL_REQUESTS)})
             return
 
         if path == "/health":
@@ -179,6 +188,7 @@ class MockHandler(BaseHTTPRequestHandler):
         if path == "/reset":
             with LOCK:
                 LAST_REQUEST.clear()
+                ALL_REQUESTS.clear()
             print("[mock] log cleared", flush=True)
             self._send_json(200, {"ok": True})
             return
@@ -213,19 +223,20 @@ class MockHandler(BaseHTTPRequestHandler):
         images = [p for p in content_parts if p.get("type") == "image_url"]
         texts = [p for p in content_parts if p.get("type") == "text"]
 
+        record = {
+            "model": body.get("model"),
+            "image_count": len(images),
+            "image_bytes": sum(len(p.get("image_url", {}).get("url", "")) for p in images),
+            "text": texts[0].get("text", "") if texts else "",
+            "has_response_format": "response_format" in body,
+            "has_temperature": "temperature" in body,
+            "authorization_present": bool(self.headers.get("Authorization")),
+        }
+
         with LOCK:
             LAST_REQUEST.clear()
-            LAST_REQUEST.update(
-                {
-                    "model": body.get("model"),
-                    "image_count": len(images),
-                    "image_bytes": sum(len(p.get("image_url", {}).get("url", "")) for p in images),
-                    "text": texts[0].get("text", "") if texts else "",
-                    "has_response_format": "response_format" in body,
-                    "has_temperature": "temperature" in body,
-                    "authorization_present": bool(self.headers.get("Authorization")),
-                }
-            )
+            LAST_REQUEST.update(record)
+            ALL_REQUESTS.append(dict(record))
 
         mode = STATE["mode"]
         print(
@@ -278,6 +289,25 @@ class MockHandler(BaseHTTPRequestHandler):
 
         if mode == "500":
             self._send_json(500, {"error": {"message": "Internal server error"}})
+            return
+
+        # ---- 只对「带图请求」报参数错误，纯文本请求正常
+        #
+        # 复刻阿里云百炼的真实行为：它对过小的图片会返回
+        # `<400> InternalError.Algo.InvalidParameter`，而同样的模型
+        # 收纯文本请求完全正常。用于验证「测试连接」的降级逻辑 ——
+        # 带图被拒时应自动改用纯文本重试，并报告「连接正常但图片未验证」，
+        # 而不是笼统地报「连接失败」。
+        if mode == "400params" and len(images) > 0:
+            self._send_json(
+                400,
+                {
+                    "error": {
+                        "code": "InternalError.Algo.InvalidParameter",
+                        "message": "<400> InternalError.Algo.InvalidParameter",
+                    }
+                },
+            )
             return
 
         # ---- 成功响应
