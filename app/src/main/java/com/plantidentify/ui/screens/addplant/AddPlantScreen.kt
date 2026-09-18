@@ -55,6 +55,7 @@ import com.plantidentify.ui.components.BackIconButton
 import com.plantidentify.ui.components.ImageRoleSelector
 import com.plantidentify.ui.components.LocalImage
 import java.io.File
+import java.util.Locale
 
 /**
  * 添加植物页（规格书第三、四节）。
@@ -455,11 +456,18 @@ private fun UploadPlanCard(plan: UploadPlan) {
     }
 }
 
+/**
+ * 把字节数格式化成易读文本。
+ *
+ * 显式指定 [Locale.US] 而不是依赖默认 locale：在某些区域（如德语、法语）
+ * 默认格式化会用逗号做小数点，「1,5 MB」这类输出在这个场景里只会让人困惑，
+ * 而且同一份数据在不同手机上显示不一致也无从排查。
+ */
 internal fun formatBytes(bytes: Long): String = when {
     bytes <= 0L -> "0 KB"
     bytes < 1024L -> "$bytes B"
     bytes < 1024L * 1024L -> "${bytes / 1024} KB"
-    else -> String.format("%.1f MB", bytes / 1024.0 / 1024.0)
+    else -> String.format(Locale.US, "%.1f MB", bytes / 1024.0 / 1024.0)
 }
 
 /** 拍摄建议（规格书第四节）：给建议但不强制 */

@@ -145,7 +145,9 @@ private fun SkeletonSelfCheckCard(
             )
             Spacer(Modifier.height(8.dp))
             Text(
-                text = "下面三个页面在 Phase 1 还没有真实入口，用这里的链接验证导航与带参数传递是否正常。后续 Phase 接入真实流程后移除本卡片。",
+                text = "植物详情与观察记录两个页面要到 Phase 5 有档案列表后才有真实入口，" +
+                    "用这里的链接验证带参数导航是否正常。识别结果页已可从添加植物页进入，" +
+                    "此处的入口用于验证无照片时的空状态。后续接入真实流程后移除本卡片。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onTertiaryContainer,
             )
@@ -153,7 +155,7 @@ private fun SkeletonSelfCheckCard(
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 TextButton(onClick = onOpenPlantDetail) { Text("植物详情 1") }
                 TextButton(onClick = onOpenObservation) { Text("观察记录 1") }
-                TextButton(onClick = onOpenRecognition) { Text("识别结果") }
+                TextButton(onClick = onOpenRecognition) { Text("识别结果空态") }
             }
         }
     }

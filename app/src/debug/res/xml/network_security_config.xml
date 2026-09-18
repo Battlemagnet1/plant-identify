@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    debug 构建的网络安全配置。
+
+    与 main 中的版本相比，这里额外允许**任意地址**走明文 HTTP，
+    目的是在本机联调时能把 Base URL 指向局域网内的自建服务
+    （例如跑在开发机上的本地模型 HTTP 服务、Mock 服务器）。
+
+    这份配置只作用于 debug 构建 —— release 构建使用
+    src/main/res/xml/network_security_config.xml，那里默认强制 HTTPS。
+-->
+<network-security-config>
+
+    <base-config cleartextTrafficPermitted="true" />
+
+</network-security-config>

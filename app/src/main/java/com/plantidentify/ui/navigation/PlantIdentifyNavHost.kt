@@ -20,8 +20,10 @@ import com.plantidentify.ui.screens.home.HomeScreen
 import com.plantidentify.ui.screens.home.HomeViewModel
 import com.plantidentify.ui.screens.observation.ObservationScreen
 import com.plantidentify.ui.screens.recognition.RecognitionScreen
+import com.plantidentify.ui.screens.recognition.RecognitionViewModel
 import com.plantidentify.ui.screens.search.SearchScreen
 import com.plantidentify.ui.screens.settings.SettingsScreen
+import com.plantidentify.ui.screens.settings.SettingsViewModel
 
 /**
  * 导航图（规格书第二十七节）。
@@ -122,7 +124,25 @@ fun PlantIdentifyNavHost(
         }
 
         composable(Routes.RECOGNITION) {
-            RecognitionScreen(onBack = navController::popBackStack)
+            val recognitionViewModel: RecognitionViewModel = viewModel(
+                factory = RecognitionViewModel.factory(
+                    draftStore = container.captureDraftStore,
+                    imageStore = container.imageStore,
+                    imageCompressor = container.imageCompressor,
+                    aiSettingsStore = container.aiSettingsStore,
+                    visionProvider = container.visionProvider,
+                ),
+            )
+
+            RecognitionScreen(
+                viewModel = recognitionViewModel,
+                // 「添加更多照片」回到添加页继续加图；回来后重新进入本页会
+                // 重新创建 ViewModel 并自动重跑识别（ViewModel 绑在导航条目上）
+                onAddMorePhotos = navController::popBackStack,
+                onOpenSettings = { navController.navigateSingleTop(Routes.SETTINGS) },
+                onRetry = recognitionViewModel::recognize,
+                onBack = navController::popBackStack,
+            )
         }
 
         composable(Routes.SEARCH) {
@@ -130,7 +150,17 @@ fun PlantIdentifyNavHost(
         }
 
         composable(Routes.SETTINGS) {
-            SettingsScreen(onBack = navController::popBackStack)
+            val settingsViewModel: SettingsViewModel = viewModel(
+                factory = SettingsViewModel.factory(
+                    store = container.aiSettingsStore,
+                    visionProvider = container.visionProvider,
+                ),
+            )
+
+            SettingsScreen(
+                viewModel = settingsViewModel,
+                onBack = navController::popBackStack,
+            )
         }
 
         composable(

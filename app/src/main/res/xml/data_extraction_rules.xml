@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    数据提取规则（Android 12 / API 31 起生效）。
+
+    ## 为什么需要这个文件
+
+    Manifest 里的 `android:allowBackup="false"` 在 Android 12 之后
+    不再覆盖全部情形 —— 系统新引入了「云备份」与「设备间迁移」两条独立通道，
+    需要用本文件逐条排除。只设 allowBackup 的话，设备迁移通道仍可能被触发。
+
+    ## 为什么全部排除
+
+    自动备份对应用户而言是**有害的**：
+      - 系统备份有 25MB 上限，只会带走数据库而带不走 files/ 下的图片文件
+      - 恢复后会得到一堆指向不存在图片的档案记录，比没有备份更糟
+      - API Key 的密文与 Keystore 密钥分离，换设备后密钥失效，
+        备份过去也解不开，只会让用户看到「Key 已保存但用不了」
+
+    本应用在 Phase 6 提供自己的完整备份（数据库 + 图片 + manifest），
+    因此完全不依赖系统的备份通道。
+-->
+<data-extraction-rules>
+
+    <cloud-backup>
+        <exclude domain="root" />
+        <exclude domain="file" />
+        <exclude domain="database" />
+        <exclude domain="sharedpref" />
+        <exclude domain="external" />
+    </cloud-backup>
+
+    <device-transfer>
+        <exclude domain="root" />
+        <exclude domain="file" />
+        <exclude domain="database" />
+        <exclude domain="sharedpref" />
+        <exclude domain="external" />
+    </device-transfer>
+
+</data-extraction-rules>

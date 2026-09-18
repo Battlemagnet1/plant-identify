@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    网络安全配置（release 版）。
+
+    ## 为什么需要它
+
+    Android 9（API 28）起默认禁止明文 HTTP。本应用允许用户自定义
+    Base URL，因此必须显式声明哪些情况允许明文，否则用户配一个
+    http:// 的本地服务会看到一句无从下手的 SSLException。
+
+    ## 为什么默认仍然禁止明文
+
+    API Key 会随请求头发出去。走明文 HTTP 意味着任何同网段的设备
+    都能直接截获这个 Key。默认强制 HTTPS 是安全底线，
+    以下白名单只覆盖「流量不出本机」的场景：
+      - localhost / 127.0.0.1：设备自身的回环地址
+      - 10.0.2.2：Android 模拟器访问宿主机的固定别名
+
+    debug 构建另有一份放宽的配置（见 src/debug/res/xml/），
+    便于在本机联调局域网内的自建服务；release 构建永远用本文件。
+-->
+<network-security-config>
+
+    <base-config cleartextTrafficPermitted="false" />
+
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">10.0.2.2</domain>
+    </domain-config>
+
+</network-security-config>

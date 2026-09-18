@@ -91,6 +91,13 @@ dependencies {
     implementation(libs.androidx.exifinterface)
     implementation(libs.androidx.datastore.preferences)
 
+    // --- Phase 3：AI 视觉识别 ---
+    // 刻意不加 okhttp 的 logging-interceptor：
+    // 它会打印请求头（含 Authorization: Bearer <apiKey>）到 Logcat，
+    // 与验收标准「API Key 不出现在任何日志中」直接冲突。
+    implementation(platform(libs.okhttp.bom))
+    implementation(libs.okhttp)
+
     debugImplementation(libs.compose.ui.tooling)
     debugImplementation(libs.compose.ui.test.manifest)
 

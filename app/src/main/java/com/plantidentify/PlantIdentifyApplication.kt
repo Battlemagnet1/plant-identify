@@ -3,6 +3,9 @@ package com.plantidentify
 import android.app.Application
 import android.content.Context
 import androidx.room.Room
+import com.plantidentify.data.ai.AiSettingsStore
+import com.plantidentify.data.ai.OpenAICompatibleVisionProvider
+import com.plantidentify.data.ai.VisionProvider
 import com.plantidentify.data.draft.CaptureDraftStore
 import com.plantidentify.data.image.ImageCompressor
 import com.plantidentify.data.local.PlantIdentifyDatabase
@@ -63,6 +66,17 @@ class AppContainer(context: Context) {
 
     /** 「添加植物」流程的拍摄草稿（DataStore） */
     val captureDraftStore: CaptureDraftStore by lazy { CaptureDraftStore(appContext) }
+
+    /** AI 服务配置（DataStore + Keystore 加密存放 API Key） */
+    val aiSettingsStore: AiSettingsStore by lazy { AiSettingsStore(appContext) }
+
+    /**
+     * 视觉识别通道。
+     *
+     * 全局单例持有一个 OkHttpClient：连接池与线程池可复用，
+     * 每次识别都新建客户端会让「连续识别多株植物」的场景凭空多出若干线程。
+     */
+    val visionProvider: VisionProvider by lazy { OpenAICompatibleVisionProvider() }
 
     /**
      * 与进程同生命周期的协程作用域。

@@ -31,6 +31,9 @@ room = "2.8.5"
 camerax = "1.6.2"
 exifinterface = "1.4.2"
 datastore = "1.2.1"
+# OkHttp 5.5.0 的 kotlin-stdlib 依赖为 2.1.21（Android 变体 2.2.21），
+# 与本项目 AGP 内置的 Kotlin 2.2.10 同属 2.2 元数据版本，可直接使用。
+okhttp = "5.5.0"
 coroutines = "1.10.2"
 junit = "4.13.2"
 
@@ -75,6 +78,15 @@ androidx-exifinterface = { group = "androidx.exifinterface", name = "exifinterfa
 
 # --- 本地配置存储（Phase 2 用于拍摄草稿，Phase 3 用于 AI 服务配置）---
 androidx-datastore-preferences = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastore" }
+
+# --- 网络（Phase 3）---
+# 只引入 OkHttp，不引入 Retrofit：
+#   1. 本应用只需打两个端点（/chat/completions 与 /models）
+#   2. 容错解析链路需要「读原始字符串再逐级降级」，序列化框架的严格解析
+#      反而与这个设计目标冲突，直接用 org.json 更贴合
+#   3. 少一个编译期代码生成插件，就少一处与 AGP 9 内置 Kotlin 冲突的可能
+okhttp-bom = { group = "com.squareup.okhttp3", name = "okhttp-bom", version.ref = "okhttp" }
+okhttp = { group = "com.squareup.okhttp3", name = "okhttp" }
 
 # --- 测试 ---
 junit = { group = "junit", name = "junit", version.ref = "junit" }

@@ -40,6 +40,13 @@ output.json
 # ---------- Kotlin ----------
 .kotlin/
 
+# ---------- Python 工具（tools/ 下的验证脚本与模拟服务端） ----------
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
 # ---------- 本地产物与工作数据 ----------
 # 工作日志与项目记忆，不随仓库发布
 .workbuddy/
