@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+        浅色主题。仅作为窗口背景与启动过渡使用，
+        实际配色由 Compose 的 Material 3 主题（ui/theme/Theme.kt）接管。
+        因此这里刻意不依赖 AppCompat / Material Components 库。
+    -->
+    <style name="Theme.PlantIdentify" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">#FFFBF7</item>
+    </style>
+</resources>

@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+        权限说明（对应规格书第十八、二十三节）：
+
+        Phase 1 只声明不申请，运行时申请在 Phase 2（相机）与 Phase 6（位置）落地。
+        相机与位置均为可选能力：用户拒绝授权时，应用必须仍能正常工作
+        （相机拒绝 → 改用系统相册；位置拒绝 → 不记录地点）。
+
+        相册选图使用系统 Photo Picker（ActivityResultContracts.PickVisualMedia），
+        targetSdk 36 下无需任何存储权限，因此这里不声明 READ_MEDIA_IMAGES。
+    -->
+
+    <!-- Phase 3：调用 AI 服务（视觉识别 + 文字分析） -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- Phase 2：拍摄植物照片 -->
+    <uses-permission android:name="android.permission.CAMERA" />
+
+    <!-- Phase 6：可选的观察地点记录 -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+
+    <!-- 相机不是必需硬件：无相机的设备也应能安装并使用相册选图 -->
+    <uses-feature
+        android:name="android.hardware.camera"
+        android:required="false" />
+    <!-- 位置不是必需硬件 -->
+    <uses-feature
+        android:name="android.hardware.location"
+        android:required="false" />
+
+    <application
+        android:name=".PlantIdentifyApplication"
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.PlantIdentify">
+        <!--
+            allowBackup 刻意关闭：
+            系统自动备份有 25MB 上限，只会带走数据库而带不走图片文件，
+            恢复后会得到一堆指向不存在图片的记录。本应用在 Phase 6 提供
+            自己的完整备份（数据库 + 图片 + manifest），因此不依赖系统备份。
+        -->
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:theme="@style/Theme.PlantIdentify"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+
+</manifest>

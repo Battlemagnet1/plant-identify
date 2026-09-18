@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 深色主题：避免深色模式下启动瞬间闪白 -->
+    <style name="Theme.PlantIdentify" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#12140F</item>
+    </style>
+</resources>

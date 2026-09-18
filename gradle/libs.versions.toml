@@ -1,0 +1,64 @@
+# plant Identify —— 依赖版本目录
+#
+# 【版本策略：为什么不写 Kotlin 2.4.20】
+# AGP 9.0 起内置 Kotlin 支持，且不再允许手动应用 org.jetbrains.kotlin.android。
+# AGP 9.1.1 的 POM 中锁定 kotlin-gradle-plugin 2.2.10，即项目实际使用的 Kotlin
+# 编译器版本是 2.2.10。因此：
+#   - Compose 编译器插件版本必须 = Kotlin 版本 = 2.2.10（版本不一致会直接报错）
+#   - KSP 必须使用与之配套的 2.2.10-2.0.2（"2.2.10" 为 Kotlin 版本，后缀为 KSP2 版本）
+#   - 升到 Kotlin 2.4.x 需要绕开内置 Kotlin（显式声明 buildscript classpath），
+#     属于不必要的风险，Phase 1 不采用
+#
+# 其余版本均已通过 Maven 仓库元数据核实存在（2026-09-18）。
+
+[versions]
+agp = "9.1.1"
+# 注意：此处的 kotlin 仅用于 Compose 编译器插件，必须与 AGP 内置的 KGP 版本一致
+kotlin = "2.2.10"
+ksp = "2.3.12"
+composeBom = "2026.06.00"
+coreKtx = "1.17.0"
+activityCompose = "1.13.0"
+lifecycle = "2.10.0"
+navigation = "2.10.1"
+room = "2.8.5"
+coroutines = "1.10.2"
+junit = "4.13.2"
+
+[libraries]
+# --- AndroidX 基础 ---
+androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
+androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
+
+# --- Lifecycle / ViewModel ---
+androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycle" }
+androidx-lifecycle-runtime-compose = { group = "androidx.lifecycle", name = "lifecycle-runtime-compose", version.ref = "lifecycle" }
+androidx-lifecycle-viewmodel-compose = { group = "androidx.lifecycle", name = "lifecycle-viewmodel-compose", version.ref = "lifecycle" }
+
+# --- Compose（版本由 BOM 统一管理，以下不写 version）---
+compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
+compose-ui = { group = "androidx.compose.ui", name = "ui" }
+compose-ui-graphics = { group = "androidx.compose.ui", name = "ui-graphics" }
+compose-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }
+compose-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
+compose-ui-test-manifest = { group = "androidx.compose.ui", name = "ui-test-manifest" }
+compose-material3 = { group = "androidx.compose.material3", name = "material3" }
+
+# --- 导航 ---
+androidx-navigation-compose = { group = "androidx.navigation", name = "navigation-compose", version.ref = "navigation" }
+
+# --- Room ---
+androidx-room-runtime = { group = "androidx.room", name = "room-runtime", version.ref = "room" }
+androidx-room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = "room" }
+androidx-room-compiler = { group = "androidx.room", name = "room-compiler", version.ref = "room" }
+
+# --- 测试 ---
+junit = { group = "junit", name = "junit", version.ref = "junit" }
+kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "coroutines" }
+androidx-room-testing = { group = "androidx.room", name = "room-testing", version.ref = "room" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+# 不再声明 org.jetbrains.kotlin.android：AGP 9 已内置 Kotlin
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }

@@ -280,17 +280,26 @@ prompt 中改为显式告知：`照片1（整株）：…  照片2（叶片）�
 |---|---|---|
 | JDK | 17.0.20 | AGP 9.x 的最低与默认 JDK 都是 17，**不需要 JDK 21** |
 | Gradle | 9.3.1 | AGP 9.1.x 要求最低 Gradle 9.3.1，与本机缓存精确匹配 |
-| AGP | **9.1.1** | 本机 Gradle 9.3.1 能支撑的最高 AGP 版本 |
-| Kotlin | 2.4.20 | Compose 编译器已并入 Kotlin 插件：`org.jetbrains.kotlin.plugin.compose`，**版本号 = Kotlin 版本号** |
+| AGP | **9.1.1** | 本机 Gradle 9.3.1 能支撑的最高 AGP 版本。⚠ AGP 9 起**内置 Kotlin**，不能再手动应用 `org.jetbrains.kotlin.android` |
+| Kotlin | **2.2.10**（AGP 内置，不可自选） | ⚠ **原估的 2.4.20 不可用**：AGP 9.1.1 的 POM 锁定 `kotlin-gradle-plugin:2.2.10`。Compose 编译器插件版本必须与之相同 |
 | Compose BOM | **2026.06.00** | 映射 Compose UI 1.11.3 / Material3 1.4.0，配合 compileSdk 36 |
-| KSP | 2.3.12 | 必须用 KSP2；**KSP1 在 Kotlin 2.3+ / AGP 9+ 上已失效** |
+| Compose 编译器插件 | 2.2.10 | 仍需显式应用（`org.jetbrains.kotlin.plugin.compose`）；**版本号必须 = Kotlin 版本号**，否则直接报版本冲突 |
+| KSP | **2.3.12** | ⚠ **必须用新版独立版本号**。与 Kotlin 版本号对齐的 `2.2.10-2.0.2` 反而不可用 —— 它用旧的 `kotlin.sourceSets` 注册生成目录，与 AGP 9 内置 Kotlin 冲突 |
 | Room | 2.8.5 | 仍需 KSP 注解处理 |
-| CameraX | **1.6.1** | ⚠ **不要用 1.6.0**，该版本存在 `ListenableFuture` 编译错误；1.7.0 仍是 alpha |
+| CameraX | **1.6.2** | ⚠ **不要用 1.6.0**（`ListenableFuture` 编译错误）。原估的 1.6.1 偏旧，实际最新稳定版为 1.6.2 |
 | Retrofit / OkHttp | 3.0.0 / 5.5.0 | 使用 `okhttp-bom` 统一版本；Retrofit 3.x 对 2.x 前向二进制兼容 |
 | DataStore | 1.2.1 | `datastore-preferences` |
 | navigation-compose | 2.10.1 | |
 | activity-compose | 1.13.0 | |
+| lifecycle | 2.10.0 | `lifecycle-runtime-compose` 提供 `collectAsStateWithLifecycle` |
+| core-ktx | 1.17.0 | 更新的 1.19.0 可能要求 compileSdk 37，暂不采用 |
 | compileSdk / targetSdk | **36 / 36** | Google Play 自 2026-08-31 起要求新应用 targetSdk ≥ 36；本机已装 android-36 |
+| minSdk | **26** | 受测试机限制：模拟器为 Android 14 / API 34，minSdk 必须 ≤ 34 |
+
+> **上表已由实际构建验证**（2026-09-18，AGP 9.1.1 工程 `assembleDebug` 通过）。
+> 原始调研中有三处与实测不符：Kotlin 版本、KSP 版本策略、CameraX 最新版本。
+> 三者的实测结论分别是：Kotlin 由 AGP 锁定为 2.2.10；KSP 必须用新版独立版本号而非与 Kotlin 对齐的旧式版本号；
+> CameraX 最新稳定版为 1.6.2。
 
 #### 为什么不用最新版本（技术债说明）
 
@@ -300,7 +309,7 @@ prompt 中改为显式告知：`照片1（整株）：…  照片2（叶片）�
 |---|---|---|---|
 | AGP | 9.4.0 | 要求 Gradle ≥ 9.6.0，本机未缓存 | 下载 Gradle 9.6 |
 | Compose BOM | 2026.09.00 | 强制 compileSdk **37** 且 AGP ≥ 9.2 | 安装 android-37 平台 + 升级 AGP |
-| Kotlin | 2.4.20 | 已是最新 | — |
+| Kotlin | 2.4.20 | 受 AGP 9.1.1 内置的 KGP 2.2.10 限制，**在当前 AGP 下无法使用** | 需绕开内置 Kotlin（在 buildscript 显式声明 classpath 强升），代价与风险都不划算 |
 
 **建议**：Phase 1 先用零下载组合跑通，确认整条链路畅通；Phase 7 做 Release 构建时再评估是否升级。**不要在项目初期同时引入构建系统升级的不确定性**。
 
@@ -572,7 +581,7 @@ Phase 2（拍照/相册/本地图片）   验证实验（纯脚本，不依赖 A
 | **交付物** | Gradle Kotlin DSL 工程 + 版本目录（`libs.versions.toml`）、Compose + Material 3 主题（植物主题色）、Navigation 图（7 个页面占位）、Room 三表 + DAO + 数据库、`local.properties.example` |
 | **依赖** | 无 |
 | **验收标准** | ① `./gradlew assembleDebug` 零错误产出 APK<br>② `./gradlew lint` 无 error 级问题<br>③ Room schema 已导出至 `app/schemas/`<br>④ 真机安装后可在 7 个页面间跳转<br>⑤ 应用可正常冷启动，无崩溃 |
-| **主要风险** | 版本兼容性（AGP/Kotlin/KSP 三者对齐）；AGP 9 的 `android.newDsl` 默认开启，第三方插件需兼容 |
+| **主要风险** | 版本兼容性（AGP/Kotlin/KSP 三者对齐）。**实测已踩到三个坑，均已在工程中规避**：① AGP 9 内置 Kotlin，不能应用 `org.jetbrains.kotlin.android`；② Kotlin 版本被 AGP 锁定为 2.2.10，不可自选；③ KSP 必须用新版独立版本号 2.3.12，与 Kotlin 对齐的旧式 `2.2.10-2.0.2` 会与内置 Kotlin 冲突 |
 | **自检命令** | `JAVA_HOME=C:/Users/a/jdk/jdk17.0.20_8 ./gradlew assembleDebug` |
 
 ### 4.4 Phase 2 —— 图像采集与本地存储

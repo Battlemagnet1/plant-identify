@@ -1,0 +1,26 @@
+## plant Identify —— 本机配置模板
+##
+## 用法：
+##   1. 复制本文件为 local.properties
+##   2. 把下面的路径改成你自己机器上的实际路径
+##
+## 说明：
+##   - local.properties 已被 .gitignore 排除，不会提交到仓库
+##   - 请勿把真实 API Key 写进本文件 —— 本应用的 API Key 由用户在 App 内
+##     「设置 → AI服务」填写，经 Android Keystore 加密后存于本地，不写入工程文件
+##
+## ⚠ Windows 路径写法（踩过坑）：
+##   Java Properties 文件里，盘符后的冒号必须转义成 \:
+##     正确：sdk.dir=C\:/Users/you/AppData/Local/Android/Sdk
+##     错误：sdk.dir=C:/Users/you/AppData/Local/Android/Sdk    ← lint 报 PropertyEscape
+##   反斜杠路径则需双写：C\:\\Users\\you\\Android\\Sdk
+
+# Android SDK 路径
+#   Windows : sdk.dir=C\:/Users/<用户名>/AppData/Local/Android/Sdk
+#   macOS   : sdk.dir=/Users/<用户名>/Library/Android/sdk
+#   Linux   : sdk.dir=/home/<用户名>/Android/Sdk
+sdk.dir=/path/to/Android/Sdk
+
+# 可选：指定构建用的 JDK 17+
+# 只有在 java 未加入 PATH 时才需要（同样注意冒号转义）
+# org.gradle.java.home=C\:/path/to/jdk-17
