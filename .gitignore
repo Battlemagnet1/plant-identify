@@ -1,0 +1,55 @@
+# ============================================================
+# plant Identify — .gitignore
+# 说明：本仓库当前为私有，但计划在功能验证完成后转为公开。
+#      转公开会暴露「全部提交历史」，因此以下规则从第一次提交起就必须生效。
+#      任何时候都不要提交真实 API Key、签名文件或本地密钥。
+# ============================================================
+
+# ---------- 密钥与凭据（严禁提交） ----------
+local.properties
+keystore.properties
+secrets.properties
+.env
+*.env
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.pem
+
+# ---------- Android / Gradle 构建产物 ----------
+*.iml
+.gradle/
+build/
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+output.json
+
+# ---------- Android Studio / IDE ----------
+.idea/
+*.hprof
+.navigation/
+*.log
+
+# ---------- Kotlin ----------
+.kotlin/
+
+# ---------- 本地产物与工作数据 ----------
+# 工作日志与项目记忆，不随仓库发布
+.workbuddy/
+# 导出/临时产物
+/export/
+/backup/
+/tmp/
+*.tmp
+
+# ---------- 系统文件 ----------
+.DS_Store
+Thumbs.db
+desktop.ini
