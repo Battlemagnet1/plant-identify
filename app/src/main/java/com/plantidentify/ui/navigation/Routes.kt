@@ -13,6 +13,17 @@ object Routes {
     /** 添加植物：拍照 / 相册 / 多图管理（Phase 2） */
     const val ADD_PLANT = "add_plant"
 
+    /** 相机拍照页（Phase 2） */
+    const val CAMERA = "camera"
+
+    /**
+     * 相机拍完后回传的临时文件路径。
+     *
+     * 通过上一个导航条目的 savedStateHandle 从相机页传回「添加植物」页，
+     * 由后者导入应用私有目录 —— 相机页只负责拍，不直接写档案，职责单一。
+     */
+    const val KEY_CAPTURED_TEMP_PATH = "captured_temp_path"
+
     /** 识别进行中 / 识别结果（Phase 3） */
     const val RECOGNITION = "recognition"
 

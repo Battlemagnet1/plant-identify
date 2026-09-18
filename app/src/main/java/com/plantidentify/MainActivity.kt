@@ -36,7 +36,10 @@ class MainActivity : ComponentActivity() {
                         factory = HomeViewModel.factory(container.plantRepository),
                     )
 
-                    PlantIdentifyNavHost(homeViewModel = homeViewModel)
+                    PlantIdentifyNavHost(
+                        homeViewModel = homeViewModel,
+                        container = container,
+                    )
                 }
             }
         }

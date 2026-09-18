@@ -3,8 +3,14 @@ package com.plantidentify
 import android.app.Application
 import android.content.Context
 import androidx.room.Room
+import com.plantidentify.data.draft.CaptureDraftStore
+import com.plantidentify.data.image.ImageCompressor
 import com.plantidentify.data.local.PlantIdentifyDatabase
 import com.plantidentify.data.repository.PlantRepository
+import com.plantidentify.data.storage.ImageStore
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 
 /**
  * 应用入口。
@@ -48,4 +54,26 @@ class AppContainer(context: Context) {
             imageDao = database.observationImageDao(),
         )
     }
+
+    /** 原图存储：写入 filesDir，对外只给相对路径 */
+    val imageStore: ImageStore by lazy { ImageStore(appContext) }
+
+    /** AI 上传副本压缩器：派生数据写入 cacheDir，可按需重建 */
+    val imageCompressor: ImageCompressor by lazy { ImageCompressor(appContext) }
+
+    /** 「添加植物」流程的拍摄草稿（DataStore） */
+    val captureDraftStore: CaptureDraftStore by lazy { CaptureDraftStore(appContext) }
+
+    /**
+     * 与进程同生命周期的协程作用域。
+     *
+     * 用于「必须执行完、不能因为界面被关闭而取消」的收尾工作。
+     * 典型场景：用户点「放弃」后立刻返回，若删除原图的协程挂在
+     * ViewModel 作用域上，会随导航条目一起被取消 —— 结果是留下一堆
+     * 无人引用的孤儿图片，或者更糟的半删除状态。
+     *
+     * 触达文件系统的写操作走这里，读操作与 UI 状态仍走各自的作用域。
+     */
+    val applicationScope: CoroutineScope =
+        CoroutineScope(SupervisorJob() + Dispatchers.IO)
 }

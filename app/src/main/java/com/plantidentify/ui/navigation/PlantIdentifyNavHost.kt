@@ -1,14 +1,20 @@
 package com.plantidentify.ui.navigation
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.plantidentify.AppContainer
+import com.plantidentify.ui.camera.CameraCaptureScreen
 import com.plantidentify.ui.screens.addplant.AddPlantScreen
+import com.plantidentify.ui.screens.addplant.AddPlantViewModel
 import com.plantidentify.ui.screens.detail.PlantDetailScreen
 import com.plantidentify.ui.screens.home.HomeScreen
 import com.plantidentify.ui.screens.home.HomeViewModel
@@ -20,11 +26,17 @@ import com.plantidentify.ui.screens.settings.SettingsScreen
 /**
  * 导航图（规格书第二十七节）。
  *
- * 单 Activity + Compose Navigation，7 个页面全部注册。
+ * 单 Activity + Compose Navigation，7 个页面全部注册，另加 Phase 2 的相机页。
+ *
+ * [container] 作为组合根被传进来：本应用不引入 DI 框架，
+ * 由 Application 持有的 [AppContainer] 提供依赖，页面各自创建自己的 ViewModel。
+ * HomeViewModel 例外 —— 它提升到 Activity 作用域（在 MainActivity 中创建），
+ * 避免每次返回首页都重新订阅统计。
  */
 @Composable
 fun PlantIdentifyNavHost(
     homeViewModel: HomeViewModel,
+    container: AppContainer,
     modifier: Modifier = Modifier,
     navController: NavHostController = rememberNavController(),
 ) {
@@ -49,8 +61,64 @@ fun PlantIdentifyNavHost(
             )
         }
 
-        composable(Routes.ADD_PLANT) {
-            AddPlantScreen(onBack = navController::popBackStack)
+        composable(Routes.ADD_PLANT) { backStackEntry ->
+            val addPlantViewModel: AddPlantViewModel = viewModel(
+                factory = AddPlantViewModel.factory(
+                    imageStore = container.imageStore,
+                    draftStore = container.captureDraftStore,
+                    imageCompressor = container.imageCompressor,
+                    externalScope = container.applicationScope,
+                ),
+            )
+
+            val draft by addPlantViewModel.draft.collectAsStateWithLifecycle()
+            val importing by addPlantViewModel.importing.collectAsStateWithLifecycle()
+            val message by addPlantViewModel.message.collectAsStateWithLifecycle()
+            val uploadPlan by addPlantViewModel.uploadPlan.collectAsStateWithLifecycle()
+
+            // 相机页拍完回传的临时文件路径
+            val capturedTempPath by backStackEntry.savedStateHandle
+                .getStateFlow<String?>(Routes.KEY_CAPTURED_TEMP_PATH, null)
+                .collectAsStateWithLifecycle()
+
+            AddPlantScreen(
+                draft = draft,
+                importing = importing,
+                message = message,
+                uploadPlan = uploadPlan,
+                imageStore = container.imageStore,
+                capturedTempPath = capturedTempPath,
+                onCapturedTempConsumed = {
+                    backStackEntry.savedStateHandle.remove<String>(Routes.KEY_CAPTURED_TEMP_PATH)
+                },
+                onImportUris = addPlantViewModel::importUris,
+                onImportCapture = addPlantViewModel::importCapture,
+                onRemove = addPlantViewModel::remove,
+                onMoveEarlier = addPlantViewModel::moveEarlier,
+                onMoveLater = addPlantViewModel::moveLater,
+                onSetRole = addPlantViewModel::setRole,
+                onDiscardAll = {
+                    addPlantViewModel.discardAll()
+                    navController.popBackStack()
+                },
+                onMessageConsumed = addPlantViewModel::consumeMessage,
+                onOpenCamera = { navController.navigateSingleTop(Routes.CAMERA) },
+                onStartRecognition = { navController.navigateSingleTop(Routes.RECOGNITION) },
+                onBack = navController::popBackStack,
+            )
+        }
+
+        composable(Routes.CAMERA) {
+            CameraCaptureScreen(
+                onCaptured = { tempFile ->
+                    // 把结果放回上一个条目（添加植物页），再由它导入正式目录
+                    navController.previousBackStackEntry
+                        ?.savedStateHandle
+                        ?.set(Routes.KEY_CAPTURED_TEMP_PATH, tempFile.absolutePath)
+                    navController.popBackStack()
+                },
+                onCancel = navController::popBackStack,
+            )
         }
 
         composable(Routes.RECOGNITION) {

@@ -5,11 +5,17 @@
 # AGP 9.1.1 的 POM 中锁定 kotlin-gradle-plugin 2.2.10，即项目实际使用的 Kotlin
 # 编译器版本是 2.2.10。因此：
 #   - Compose 编译器插件版本必须 = Kotlin 版本 = 2.2.10（版本不一致会直接报错）
-#   - KSP 必须使用与之配套的 2.2.10-2.0.2（"2.2.10" 为 Kotlin 版本，后缀为 KSP2 版本）
+#   - KSP 必须使用「新版独立版本号」2.3.12。注意：与 Kotlin 版本号对齐的旧式
+#     2.2.10-2.0.2 反而不能用 —— 它用 kotlin.sourceSets 注册生成目录，
+#     在 AGP 9 内置 Kotlin 下会直接报错
 #   - 升到 Kotlin 2.4.x 需要绕开内置 Kotlin（显式声明 buildscript classpath），
-#     属于不必要的风险，Phase 1 不采用
+#     属于不必要的风险，不采用
 #
-# 其余版本均已通过 Maven 仓库元数据核实存在（2026-09-18）。
+# 【compileSdk 为什么是 37】
+# navigation-compose 2.10.1 与 lifecycle 2.11.0 的 AAR 元数据强制要求
+# 调用方 compileSdk ≥ 37。targetSdk 仍保持 36（两者相互独立）。
+#
+# 所有版本均已通过 Maven 仓库元数据核实存在（2026-09-18）。
 
 [versions]
 agp = "9.1.1"
@@ -22,6 +28,9 @@ activityCompose = "1.13.0"
 lifecycle = "2.10.0"
 navigation = "2.10.1"
 room = "2.8.5"
+camerax = "1.6.2"
+exifinterface = "1.4.2"
+datastore = "1.2.1"
 coroutines = "1.10.2"
 junit = "4.13.2"
 
@@ -51,6 +60,21 @@ androidx-navigation-compose = { group = "androidx.navigation", name = "navigatio
 androidx-room-runtime = { group = "androidx.room", name = "room-runtime", version.ref = "room" }
 androidx-room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = "room" }
 androidx-room-compiler = { group = "androidx.room", name = "room-compiler", version.ref = "room" }
+
+# --- CameraX（Phase 2）---
+# 勿用 1.6.0：该版本存在 ListenableFuture 编译错误
+androidx-camera-core = { group = "androidx.camera", name = "camera-core", version.ref = "camerax" }
+androidx-camera-camera2 = { group = "androidx.camera", name = "camera-camera2", version.ref = "camerax" }
+androidx-camera-lifecycle = { group = "androidx.camera", name = "camera-lifecycle", version.ref = "camerax" }
+androidx-camera-view = { group = "androidx.camera", name = "camera-view", version.ref = "camerax" }
+
+# --- 图片处理（Phase 2）---
+# ExifInterface 用于读取拍摄方向：手机照片常靠 EXIF 标记方向，
+# 不处理会导致上传给 AI 的图上下颠倒，进而严重影响识别准确率
+androidx-exifinterface = { group = "androidx.exifinterface", name = "exifinterface", version.ref = "exifinterface" }
+
+# --- 本地配置存储（Phase 2 用于拍摄草稿，Phase 3 用于 AI 服务配置）---
+androidx-datastore-preferences = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastore" }
 
 # --- 测试 ---
 junit = { group = "junit", name = "junit", version.ref = "junit" }

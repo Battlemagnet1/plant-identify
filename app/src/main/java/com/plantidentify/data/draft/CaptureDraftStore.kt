@@ -1,0 +1,104 @@
+package com.plantidentify.data.draft
+
+import android.content.Context
+import android.util.Log
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.preferencesDataStore
+import com.plantidentify.data.local.entity.ImageRole
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import org.json.JSONArray
+import org.json.JSONObject
+
+private val Context.draftDataStore: DataStore<Preferences> by
+    preferencesDataStore(name = "capture_draft")
+
+/**
+ * 拍摄草稿的持久化（DataStore + JSON）。
+ *
+ * 选择 DataStore 而非新增一张 Room 表的原因：
+ * 草稿是**流程中的临时状态**，生命周期只有「添加植物」这一屏；为它建表意味着
+ * 数据库要升版本、写迁移，而 Phase 3 接上识别后这张表又会变成死表。
+ *
+ * 选择手写 JSON（org.json）而非引入 kotlinx.serialization 的原因：
+ * 结构极简（一个数组、两个字段），而引入序列化插件在 AGP 9 内置 Kotlin
+ * 这套工具链上属于不必要的额外风险面。
+ */
+class CaptureDraftStore(private val context: Context) {
+
+    private val jsonKey = stringPreferencesKey(KEY_JSON)
+
+    /** 当前草稿。数据损坏时降级为空草稿，不抛给调用方 */
+    val draft: Flow<CaptureDraft> = context.draftDataStore.data
+        .map { prefs -> decode(prefs[jsonKey]) }
+        .distinctUntilChanged()
+
+    /** 读取一次当前值（用于非响应式场景，例如校验剩余可添加张数） */
+    suspend fun current(): CaptureDraft = decode(context.draftDataStore.data.first()[jsonKey])
+
+    /** 以原子方式更新草稿 */
+    suspend fun update(transform: (CaptureDraft) -> CaptureDraft) {
+        context.draftDataStore.edit { prefs ->
+            val updated = transform(decode(prefs[jsonKey]))
+            prefs[jsonKey] = encode(updated)
+        }
+    }
+
+    suspend fun clear() {
+        context.draftDataStore.edit { prefs -> prefs.remove(jsonKey) }
+    }
+
+    // ---------------- 序列化 ----------------
+
+    private fun encode(draft: CaptureDraft): String {
+        val array = JSONArray()
+        draft.images.forEach { image ->
+            array.put(
+                JSONObject()
+                    .put(FIELD_PATH, image.relativePath)
+                    .put(FIELD_ROLE, image.role.name),
+            )
+        }
+        return JSONObject().put(FIELD_IMAGES, array).toString()
+    }
+
+    private fun decode(raw: String?): CaptureDraft {
+        if (raw.isNullOrBlank()) return CaptureDraft.EMPTY
+        return runCatching {
+            val array = JSONObject(raw).optJSONArray(FIELD_IMAGES) ?: JSONArray()
+            val images = buildList {
+                for (i in 0 until array.length()) {
+                    val item = array.optJSONObject(i) ?: continue
+                    val path = item.optString(FIELD_PATH).takeIf { it.isNotBlank() } ?: continue
+                    add(
+                        DraftImage(
+                            relativePath = path,
+                            role = parseRole(item.optString(FIELD_ROLE)),
+                        ),
+                    )
+                }
+            }
+            CaptureDraft(images.take(CaptureDraft.MAX_IMAGES))
+        }.getOrElse { error ->
+            // 草稿损坏（例如升级过程中断导致写了一半）不应让应用崩溃
+            Log.w(TAG, "草稿数据解析失败，已重置为空草稿", error)
+            CaptureDraft.EMPTY
+        }
+    }
+
+    private fun parseRole(name: String): ImageRole =
+        runCatching { ImageRole.valueOf(name) }.getOrDefault(ImageRole.UNKNOWN)
+
+    private companion object {
+        const val TAG = "CaptureDraftStore"
+        const val KEY_JSON = "draft_json"
+        const val FIELD_IMAGES = "images"
+        const val FIELD_PATH = "path"
+        const val FIELD_ROLE = "role"
+    }
+}
