@@ -4,7 +4,10 @@ import android.app.Application
 import android.content.Context
 import androidx.room.Room
 import com.plantidentify.data.ai.AiSettingsStore
+import com.plantidentify.data.ai.ChatCompletionsClient
+import com.plantidentify.data.ai.OpenAICompatibleTextProvider
 import com.plantidentify.data.ai.OpenAICompatibleVisionProvider
+import com.plantidentify.data.ai.TextProvider
 import com.plantidentify.data.ai.VisionProvider
 import com.plantidentify.data.draft.CaptureDraftStore
 import com.plantidentify.data.image.ImageCompressor
@@ -14,6 +17,7 @@ import com.plantidentify.data.storage.ImageStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import okhttp3.OkHttpClient
 
 /**
  * 应用入口。
@@ -50,14 +54,6 @@ class AppContainer(context: Context) {
             .build()
     }
 
-    val plantRepository: PlantRepository by lazy {
-        PlantRepository(
-            plantRecordDao = database.plantRecordDao(),
-            observationDao = database.plantObservationDao(),
-            imageDao = database.observationImageDao(),
-        )
-    }
-
     /** 原图存储：写入 filesDir，对外只给相对路径 */
     val imageStore: ImageStore by lazy { ImageStore(appContext) }
 
@@ -71,12 +67,39 @@ class AppContainer(context: Context) {
     val aiSettingsStore: AiSettingsStore by lazy { AiSettingsStore(appContext) }
 
     /**
-     * 视觉识别通道。
+     * 共享的 HTTP 客户端。
      *
-     * 全局单例持有一个 OkHttpClient：连接池与线程池可复用，
-     * 每次识别都新建客户端会让「连续识别多株植物」的场景凭空多出若干线程。
+     * 视觉与文字两条通道共用同一个实例：连接池、线程池、DNS 缓存都可复用。
+     * 如果各自新建，用户连续识别多株植物时会出现线程数悄悄翻倍的情况。
      */
-    val visionProvider: VisionProvider by lazy { OpenAICompatibleVisionProvider() }
+    private val httpClient: OkHttpClient by lazy { ChatCompletionsClient.defaultClient() }
+
+    private val chatClient: ChatCompletionsClient by lazy { ChatCompletionsClient(httpClient) }
+
+    /** 视觉识别通道 —— 全局单例，避免每次识别都重建客户端 */
+    val visionProvider: VisionProvider by lazy { OpenAICompatibleVisionProvider(chatClient) }
+
+    /**
+     * 文字分析通道。
+     *
+     * 可失败，且失败不影响识别结果落库（规格书第三十节）。
+     */
+    val textProvider: TextProvider by lazy { OpenAICompatibleTextProvider(chatClient) }
+
+    /**
+     * 植物档案仓库 —— UI 层访问数据的唯一入口。
+     *
+     * 注入 [captureDraftStore] 是因为「保存识别结果」这个动作天然是跨存储介质的：
+     * 三张表要写入 Room，而草稿在 DataStore 里、需要同时清掉。
+     * 把清草稿留在 ViewModel 做会让两次写入之间存在不一致窗口
+     * （库里有档案、草稿还在，用户再进来会看到重复的照片）。
+     */
+    val plantRepository: PlantRepository by lazy {
+        PlantRepository(
+            database = database,
+            draftStore = captureDraftStore,
+        )
+    }
 
     /**
      * 与进程同生命周期的协程作用域。

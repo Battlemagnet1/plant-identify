@@ -140,11 +140,120 @@ object PromptBuilder {
      * 以及这个模型是否接受图片输入」这四件事。
      * 因此刻意用一张 1×1 的图片，让请求体尽可能小、费用尽可能低。
      */
+    /**
+     * 构造植物百科分析的 prompt（规格书第九节）。
+     *
+     * 三条设计要点：
+     *
+     * 1. **明确要求「不确定就留空」**
+     *    模型写百科时有强烈的「填满每个字段」倾向，会编出看似合理但错误的内容。
+     *    植物学领域尤其危险 —— 花期月份、养护细节编错了，用户很难发现。
+     *    因此把「留空优于编造」写成显式指令。
+     *
+     * 2. **置信度低时改写成属/科的通用特征**
+     *    如果识别本身只有 0.6 的把握，却按某个具体种去写，等于把不确定性
+     *    放大成了确定性的错误内容。
+     *
+     * 3. **明令禁止下鉴定结论**
+     *    对应规格书第三十一节「AI 结果不能完全信任」，避免文案越权。
+     */
+    fun buildAnalysisPrompt(
+        name: String,
+        latinName: String?,
+        family: String?,
+        genus: String?,
+        category: String?,
+        confidence: Double,
+        evidence: List<String>,
+    ): String {
+        val facts = buildList {
+            add("- 中文名：$name")
+            latinName?.takeIf { it.isNotBlank() }?.let { add("- 拉丁学名：$it") }
+            family?.takeIf { it.isNotBlank() }?.let { add("- 科：$it") }
+            genus?.takeIf { it.isNotBlank() }?.let { add("- 属：$it") }
+            category?.takeIf { it.isNotBlank() }?.let { add("- 植物类型：$it") }
+            add("- 图像识别的置信度：${(confidence * 100).toInt()}%")
+            if (evidence.isNotEmpty()) {
+                add("- 识别依据：${evidence.joinToString("、")}")
+            }
+        }.joinToString("\n")
+
+        return buildString {
+            appendLine(ANALYST_ROLE.trimIndent())
+            appendLine()
+            appendLine("## 植物信息（已由图像识别给出）")
+            appendLine()
+            appendLine(facts)
+            appendLine()
+            appendLine(ANALYSIS_SCHEMA_SPEC.trimIndent())
+            appendLine()
+            appendLine(ANALYSIS_CONTENT_RULES.trimIndent())
+
+            if (confidence < LOW_CONFIDENCE_FOR_ANALYSIS) {
+                appendLine()
+                appendLine()
+                append(LOW_CONFIDENCE_ANALYSIS_RULE.trimIndent())
+            }
+        }
+    }
+
     fun buildConnectivityPrompt(): String =
         "请只回答一个 JSON 对象：{\"ok\": true, \"model_ack\": \"已收到图片\"}。" +
             "不要输出任何其他文字。"
 
     // ---------------- 片段 ----------------
+
+    /** 低于此置信度时，文字分析改写成属/科的通用特征（与补图阈值一致） */
+    private const val LOW_CONFIDENCE_FOR_ANALYSIS = 0.70
+
+    private val ANALYST_ROLE = """
+        你是一位植物学作者，需要为下面这株植物撰写一份简明的百科介绍。
+    """.trimIndent()
+
+    private val ANALYSIS_SCHEMA_SPEC = """
+        ## 输出格式
+
+        只输出一个 JSON 对象，不要有任何其他文字，也不要使用 ``` 代码块标记。
+
+        {
+          "description": "植物简介",
+          "morphological_features": "形态特征",
+          "growth_habits": "生长习性",
+          "flowering_period": "花期",
+          "fruiting_period": "果期",
+          "landscape_uses": "园林用途",
+          "care_advice": "养护建议"
+        }
+    """.trimIndent()
+
+    private val ANALYSIS_CONTENT_RULES = """
+        ## 内容要求
+
+        1. **准确优先于丰富**
+           你不确定的内容，把该字段写成空字符串 ""。**不要编造。**
+           一个诚实的空白远比一段似是而非的描述有价值 ——
+           用户会当真，而你写错的花期或养护方法他很难发现。
+
+        2. **不要复述已知信息**
+           不要写「这是一株紫薇」这类废话，直接写内容。
+
+        3. **篇幅**
+           每个字段 1–3 句话，全部加起来不超过 400 字。这是给手机屏幕看的。
+
+        4. **不要下鉴定结论**
+           不要出现「可以确定是」「一定是」「保证是」这类表述。
+           你只是在写百科内容，鉴定结论由用户的实地观察决定。
+    """.trimIndent()
+
+    private val LOW_CONFIDENCE_ANALYSIS_RULE = """
+        ## 特别注意：本次识别置信度偏低
+
+        图像识别对这株植物的判断把握不大，物种可能不对。
+        因此请**以属或科的通用特征为主**来写，不要写只有某个具体种才有的特征
+        （例如具体的花色、精确的花期月份、特定的叶片尺寸）。
+
+        宁可写得笼统一些，也不要基于一个可能错误的物种名展开细节。
+    """.trimIndent()
 
     private fun roleSection(roles: List<ImageRole>): String = buildString {
         val labelled = roles.withIndex().filter { it.value != ImageRole.UNKNOWN }

@@ -3,7 +3,7 @@ package com.plantidentify.ui.screens.observation
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import com.plantidentify.ui.components.PhasePlaceholder
-import com.plantidentify.ui.screens.detail.RouteArgumentCard
+import com.plantidentify.ui.components.RouteArgumentCard
 
 @Composable
 fun ObservationScreen(

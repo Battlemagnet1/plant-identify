@@ -34,17 +34,30 @@ App 侧配置：
     curl -X POST "http://127.0.0.1:8899/control?mode=ok"
 
 可选 mode：
+    ---- 视觉识别（请求带图片）----
     ok            完整结构化 JSON（默认）
     fenced        带 ```json 代码块围栏
     chatty        JSON 前后夹带解释文字
     camel         字段名用 camelCase（latinName 等）
     partial       只返回 name 与 confidence
+    lowconf       字段完整但 confidence=0.62（验证补图提示）
     notjson       返回纯文字描述，完全不是 JSON
     empty         content 为空字符串
     slow          延迟 3 秒再返回
     401 / 404 / 400model / 400image / 429 / 500   对应 HTTP 错误
     params        仅带图请求报 400 InvalidParameter，纯文本请求正常
                   （复刻阿里云百炼对过小图片的行为，用于验证测试连接的降级逻辑）
+
+    ---- 文字分析（请求不带图片，与上面共用同一个 mode 开关）----
+    analysisEmpty    七个字段全为空字符串
+    analysisBad      返回一句话，不是 JSON
+    analysisPartial  只返回 description 与 flowering_period
+    analysisFenced   带代码块围栏
+    analysisSnake    键名用中文（简介/形态特征/…），检验键名归一化
+
+    默认（未指定上述文字模式时）返回一份完整的植物百科 JSON。
+    之所以不复用视觉那套模式：`ok` 对文字分析意味着「返回完整百科」，
+    而 `notjson` 这类模式对两条通道的语义不同，混在一起会很难读。
 
 ## 查看收到的请求
 
@@ -94,12 +107,95 @@ PARTIAL_RESULT = {
     "confidence": 0.62,
 }
 
+# 低置信度场景：规格书第六节要求 confidence < 0.70 时提示补充照片。
+# 与 partial 的区别是它**字段完整**，只是把握不大 —— 用来验证
+# 「结构没问题的低置信度」也能触发补图提示。
+LOW_CONFIDENCE_RESULT = {
+    "name": "紫薇（疑似）",
+    "latin_name": "Lagerstroemia indica",
+    "family": "千屈菜科",
+    "genus": "紫薇属",
+    "category": "落叶灌木或小乔木",
+    "confidence": 0.62,
+    "evidence": ["叶片形态", "整体株型"],
+    "missing_information": ["花部特征", "完整株型"],
+    "possible_alternatives": [{"name": "大花紫薇", "confidence": 0.25}],
+    "conflicts": [],
+}
+
 PLAIN_TEXT = (
     "从这几张照片来看，我判断这是一株紫薇。\n\n"
     "主要依据是它的叶片呈椭圆形，对生；树皮平滑，呈灰色；整体株型是灌木状。\n"
     "秋季叶片会转红，也是很典型的特征。\n\n"
     "不过照片里没有拍清楚花，所以不能完全确定是不是大花紫薇。"
 )
+
+# ---------------------------------------------------------------- 文字分析
+
+# 植物百科的响应。它对应**不带图片**的请求 ——
+# 服务端据此区分「这是视觉识别还是文字分析」，一个模式同时服务两条通道。
+ANALYSIS_RESULT = {
+    "description": "紫薇是千屈菜科紫薇属的落叶灌木或小乔木，夏季开花，花期可长达数月。",
+    "morphological_features": "树皮平滑呈灰色，枝干常扭曲；叶互生或对生，椭圆形至倒卵形；"
+    "圆锥花序顶生，花瓣皱缩。",
+    "growth_habits": "喜光，稍耐半阴，喜温暖湿润气候；耐旱怕涝，对土壤要求不严。",
+    "flowering_period": "6—9 月",
+    "fruiting_period": "9—12 月",
+    "landscape_uses": "园林中常用作行道树、庭荫树与花篱，也可盆栽观赏。",
+    "care_advice": "生长期保持土壤湿润但不积水；花后适度修剪可促发新枝、延长花期。",
+}
+
+# 一句话带过，模拟「模型没按要求输出 JSON」
+ANALYSIS_PLAIN_TEXT = "抱歉，我无法生成这株植物的完整百科介绍。"
+
+# JSON 合法但所有字段为空
+ANALYSIS_EMPTY = {
+    "description": "",
+    "morphological_features": "",
+    "growth_habits": "",
+    "flowering_period": "",
+    "fruiting_period": "",
+    "landscape_uses": "",
+    "care_advice": "",
+}
+
+
+def build_analysis_content(mode: str) -> str:
+    """按模式生成文字分析的 content 字段。"""
+    if mode == "analysisEmpty":
+        return json.dumps(ANALYSIS_EMPTY, ensure_ascii=False)
+
+    if mode == "analysisBad":
+        return ANALYSIS_PLAIN_TEXT
+
+    if mode == "analysisPartial":
+        return json.dumps(
+            {
+                "description": "紫薇是千屈菜科紫薇属的落叶灌木或小乔木。",
+                "flowering_period": "6—9 月",
+            },
+            ensure_ascii=False,
+        )
+
+    if mode == "analysisFenced":
+        return "```json\n" + json.dumps(ANALYSIS_RESULT, ensure_ascii=False) + "\n```"
+
+    if mode == "analysisSnake":
+        # 键名写成中文，检验解析器的归一化匹配
+        return json.dumps(
+            {
+                "简介": ANALYSIS_RESULT["description"],
+                "形态特征": ANALYSIS_RESULT["morphological_features"],
+                "生长习性": ANALYSIS_RESULT["growth_habits"],
+                "花期": ANALYSIS_RESULT["flowering_period"],
+                "果期": ANALYSIS_RESULT["fruiting_period"],
+                "园林用途": ANALYSIS_RESULT["landscape_uses"],
+                "养护建议": ANALYSIS_RESULT["care_advice"],
+            },
+            ensure_ascii=False,
+        )
+
+    return json.dumps(ANALYSIS_RESULT, ensure_ascii=False)
 
 
 def build_content(mode: str) -> str:
@@ -123,6 +219,9 @@ def build_content(mode: str) -> str:
     if mode == "partial":
         return json.dumps(PARTIAL_RESULT, ensure_ascii=False)
 
+    if mode == "lowconf":
+        return json.dumps(LOW_CONFIDENCE_RESULT, ensure_ascii=False)
+
     if mode == "notjson":
         return PLAIN_TEXT
 
@@ -133,6 +232,25 @@ def build_content(mode: str) -> str:
 
 
 # ---------------------------------------------------------------- 状态
+
+# 本文件支持的全部模式。
+#
+# 除了给 /control 做校验（打错字立刻报错，而不是静默退化成默认响应），
+# 它还解决一个更隐蔽的问题：**验证脚本无法确认服务端进程是不是最新代码**。
+# Python 在启动时就把源码载入内存，之后编辑文件对已运行的进程没有任何影响。
+# 一旦忘了重启，就会出现「模式切了、响应没变」的假象，而 /health 报的
+# mode 又完全正确 —— 这条弯路真实发生过。现在 /health 会一并返回本清单，
+# 脚本只要断言目标模式在清单里，就能立刻发现自己在跟旧进程说话。
+KNOWN_MODES = (
+    # 视觉识别
+    "ok", "fenced", "chatty", "camel", "partial", "lowconf",
+    "notjson", "empty", "slow",
+    # HTTP 错误
+    "401", "404", "400model", "400image", "400params", "429", "500", "params",
+    # 文字分析
+    "analysisEmpty", "analysisBad", "analysisPartial", "analysisFenced",
+    "analysisSnake",
+)
 
 STATE = {"mode": "ok"}
 LAST_REQUEST: dict = {}
@@ -165,7 +283,18 @@ class MockHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/health":
-            self._send_json(200, {"ok": True, "mode": STATE["mode"]})
+            # modes 一并返回：验证脚本据此确认「磁盘上的脚本」与
+            # 「正在跑的进程」是同一份代码。
+            #
+            # 这个字段是被真实事故逼出来的 —— Python 进程在启动时就把源码
+            # 载入内存，之后编辑文件对已运行的进程毫无影响。于是出现过
+            # 这种假象：/health 报着 mode=lowconf，实际返回的却是默认结果，
+            # 因为跑着的进程里根本没有 lowconf 这个分支。
+            # 光看 mode 无法发现，必须能问出「你到底支持哪些模式」。
+            self._send_json(
+                200,
+                {"ok": True, "mode": STATE["mode"], "modes": list(KNOWN_MODES)},
+            )
             return
 
         self._send_json(404, {"error": {"message": f"unknown path {path}"}})
@@ -179,6 +308,20 @@ class MockHandler(BaseHTTPRequestHandler):
         if path == "/control":
             query = parse_qs(parsed.query)
             mode = (query.get("mode") or ["ok"])[0]
+            # 不明模式直接拒绝，不静默退化成默认响应 ——
+            # 否则「模式名打错」和「模式没生效」这两种情况都无法区分
+            if mode not in KNOWN_MODES:
+                print(f"[mock] 拒绝未知模式: {mode}", flush=True)
+                self._send_json(
+                    400,
+                    {
+                        "error": {
+                            "message": f"未知模式 {mode!r}",
+                            "known_modes": list(KNOWN_MODES),
+                        }
+                    },
+                )
+                return
             with LOCK:
                 STATE["mode"] = mode
             print(f"[mock] mode -> {mode}", flush=True)
@@ -311,6 +454,12 @@ class MockHandler(BaseHTTPRequestHandler):
             return
 
         # ---- 成功响应
+        # 不带图片的请求视为文字分析，带图的视为视觉识别。
+        # 这样一个模式可以同时服务两条通道，不必在两套模式间来回切换。
+        content_text = (
+            build_analysis_content(mode) if len(images) == 0 else build_content(mode)
+        )
+
         payload = {
             "id": "chatcmpl-mock-0001",
             "object": "chat.completion",
@@ -319,7 +468,7 @@ class MockHandler(BaseHTTPRequestHandler):
             "choices": [
                 {
                     "index": 0,
-                    "message": {"role": "assistant", "content": build_content(mode)},
+                    "message": {"role": "assistant", "content": content_text},
                     "finish_reason": "stop",
                 }
             ],
@@ -349,6 +498,9 @@ def main() -> None:
     server = ThreadingHTTPServer((args.host, args.port), MockHandler)
     print(f"[mock] listening on http://{args.host}:{args.port}", flush=True)
     print(f"[mock] mode = {STATE['mode']}", flush=True)
+    # 启动时把「本进程支持哪些模式」打进日志 —— 修改本文件后若忘记重启，
+    # 这行输出会立刻暴露新旧差异（进程里的清单不会跟着文件更新）
+    print(f"[mock] 支持 {len(KNOWN_MODES)} 种模式: {', '.join(KNOWN_MODES)}", flush=True)
     print("[mock] 切换模式: curl -X POST 'http://127.0.0.1:%d/control?mode=ok'" % args.port, flush=True)
 
     try:

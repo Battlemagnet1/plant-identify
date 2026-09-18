@@ -20,6 +20,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -67,11 +68,15 @@ fun RecognitionScreen(
     onBack: () -> Unit,
     onOpenSettings: () -> Unit,
     onAddMorePhotos: () -> Unit,
+    onOpenPlantDetail: (Long) -> Unit,
     onRetry: () -> Unit,
+    onSave: () -> Unit,
+    onRegenerateAnalysis: () -> Unit,
     viewModel: RecognitionViewModel,
     modifier: Modifier = Modifier,
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val saveState by viewModel.saveState.collectAsStateWithLifecycle()
 
     Scaffold(
         modifier = modifier,
@@ -83,6 +88,20 @@ fun RecognitionScreen(
                     containerColor = MaterialTheme.colorScheme.surface,
                 ),
             )
+        },
+        bottomBar = {
+            // 只有拿到结构化结果才谈得上保存：半结构化（只剩原文）时
+            // 没有植物名称等建档案必需的字段，因此不显示保存入口，
+            // 页面内的「本次识别」卡片会说明原因
+            val result = (state as? RecognitionUiState.Success)?.response?.result
+            if (result != null) {
+                SaveBar(
+                    saveState = saveState,
+                    onSave = onSave,
+                    onOpenPlantDetail = onOpenPlantDetail,
+                    onRegenerateAnalysis = onRegenerateAnalysis,
+                )
+            }
         },
     ) { innerPadding ->
         LazyColumn(
@@ -585,11 +604,139 @@ private fun PipelineSummaryCard(response: VisionResponse) {
             HorizontalDivider()
             Spacer(Modifier.height(10.dp))
             Text(
-                text = "识别结果尚未存入植物档案 —— 档案保存需要处理重复植物归并，" +
-                    "将在后续阶段开放。",
+                text = if (response.isStructured) {
+                    "确认结果无误后，请点下方的「保存到档案」写入植物档案。"
+                } else {
+                    "结构化解析失败，没有可用的植物名称，因此无法保存为档案。" +
+                        "可点「重新识别」再试一次。"
+                },
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
+    }
+}
+
+/**
+ * 底部保存栏。
+ *
+ * 固定在底部而不是放在内容流里：结果页内容较长（识别信息 + 判定依据 +
+ * 候选植物 + 原始返回），把主操作埋在页面深处会让用户找不到。
+ *
+ * 四种状态各自给出**明确的下一步**：
+ *  - 未保存 → 明确的「保存到档案」+ 一句免责说明
+ *  - 保存中 → 告知正在生成百科（这一步可能要十几秒，不说明会被当成卡死）
+ *  - 已保存但有分析 → 「查看植物档案」为主，另给「重新生成」
+ *  - 已保存无分析 → 明确写出「基础识别结果不受影响」，避免用户以为白识别了
+ */
+@Composable
+private fun SaveBar(
+    saveState: SaveState,
+    onSave: () -> Unit,
+    onOpenPlantDetail: (Long) -> Unit,
+    onRegenerateAnalysis: () -> Unit,
+) {
+    Surface(
+        tonalElevation = 3.dp,
+        shadowElevation = 8.dp,
+        color = MaterialTheme.colorScheme.surface,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            when (saveState) {
+                SaveState.NotSaved -> {
+                    Text(
+                        text = "识别结果仅供参考，请结合实地观察判断。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Button(
+                        onClick = onSave,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("保存到档案")
+                    }
+                }
+
+                SaveState.Saving -> {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    Text(
+                        text = "正在保存并生成植物百科，可能需要十几秒…",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+
+                is SaveState.SavedWithAnalysis -> {
+                    Text(
+                        text = "已保存到植物档案",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    saveState.partialNote?.let { note ->
+                        Text(
+                            text = note,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = { onOpenPlantDetail(saveState.plantId) },
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text("查看植物档案")
+                        }
+                        OutlinedButton(onClick = onRegenerateAnalysis) {
+                            Text("重新生成")
+                        }
+                    }
+                }
+
+                is SaveState.SavedWithoutAnalysis -> {
+                    Text(
+                        text = "已保存到植物档案（植物百科暂缺）",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.tertiary,
+                    )
+                    Text(
+                        text = "${saveState.reason}。识别结果本身不受影响，已完整保存。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = { onOpenPlantDetail(saveState.plantId) },
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text("查看植物档案")
+                        }
+                        OutlinedButton(onClick = onRegenerateAnalysis) {
+                            Text("重新生成分析")
+                        }
+                    }
+                }
+
+                is SaveState.Failed -> {
+                    Text(
+                        text = "保存失败：${saveState.message}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    Button(
+                        onClick = onSave,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("重试保存")
+                    }
+                }
+            }
         }
     }
 }

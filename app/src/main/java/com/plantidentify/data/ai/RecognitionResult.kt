@@ -1,5 +1,7 @@
 package com.plantidentify.data.ai
 
+import com.plantidentify.domain.model.ConfidenceGrade
+
 /**
  * 视觉识别的结果（规格书第五节）。
  *
@@ -59,27 +61,16 @@ data class RecognitionResult(
     /**
      * 识别质量星级（规格书第七节，1–5 星）。
      *
-     * 规格书给出了五档名称但未给阈值，这里按置信度区间映射。
-     * 注意这是**展示层的分级**，不改变 [confidence] 本身的含义。
+     * 分级规则见 [com.plantidentify.domain.model.ConfidenceGrade] ——
+     * 抽出去是因为植物详情页展示同一个置信度时也要用，
+     * 两处各写一份必然会不一致。
      */
     val qualityStars: Int
-        get() = when {
-            confidence >= 0.90 -> 5
-            confidence >= 0.80 -> 4
-            confidence >= 0.70 -> 3
-            confidence >= 0.50 -> 2
-            else -> 1
-        }
+        get() = ConfidenceGrade.stars(confidence)
 
     /** 识别质量的文字描述，与 [qualityStars] 一一对应 */
     val qualityLabel: String
-        get() = when (qualityStars) {
-            5 -> "优秀"
-            4 -> "良好"
-            3 -> "一般"
-            2 -> "较低"
-            else -> "很低"
-        }
+        get() = ConfidenceGrade.label(confidence)
 
     companion object {
         /** 低于此值提示补充照片（规格书第六节的 0.70） */

@@ -27,6 +27,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -77,6 +78,12 @@ fun SettingsScreen(
     val hasSavedKey by viewModel.hasSavedKey.collectAsStateWithLifecycle()
     val strategy by viewModel.strategy.collectAsStateWithLifecycle()
 
+    val sharesOneEndpoint by viewModel.sharesOneEndpoint.collectAsStateWithLifecycle()
+    val textForm by viewModel.textForm.collectAsStateWithLifecycle()
+    val textApiKeyVisible by viewModel.textApiKeyVisible.collectAsStateWithLifecycle()
+    val testingText by viewModel.testingText.collectAsStateWithLifecycle()
+    val textTestOutcome by viewModel.textTestOutcome.collectAsStateWithLifecycle()
+
     val snackbarHostState = remember { SnackbarHostState() }
 
     LaunchedEffect(message) {
@@ -109,7 +116,17 @@ fun SettingsScreen(
             contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            item { ConfigStatusCard(form = form, hasSavedKey = hasSavedKey) }
+            item {
+                ConfigStatusCard(
+                    form = form,
+                    hasSavedKey = hasSavedKey,
+                    textReadiness = if (sharesOneEndpoint) {
+                        "与视觉识别共用"
+                    } else {
+                        textForm.readinessText
+                    },
+                )
+            }
 
             item { SectionTitle("视觉识别服务") }
 
@@ -193,6 +210,126 @@ fun SettingsScreen(
                 )
             }
 
+            item { SectionTitle("文字分析服务") }
+
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "使用同一个 AI 服务",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        Text(
+                            text = "关闭后可为植物百科单独指定模型",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(
+                        checked = sharesOneEndpoint,
+                        onCheckedChange = viewModel::setSharesOneEndpoint,
+                    )
+                }
+            }
+
+            if (sharesOneEndpoint) {
+                item {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                        ),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+                    ) {
+                        Text(
+                            text = "植物百科将使用上方的视觉配置生成。" +
+                                "若那个模型不适合写作（有些视觉模型文字组织能力较弱），" +
+                                "可关闭此开关单独配置。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                            modifier = Modifier.padding(14.dp),
+                        )
+                    }
+                }
+            } else {
+                item {
+                    PresetChips(
+                        selected = textForm.preset,
+                        onSelect = viewModel::selectTextPreset,
+                    )
+                }
+
+                item {
+                    OutlinedTextField(
+                        value = textForm.baseUrl,
+                        onValueChange = viewModel::updateTextBaseUrl,
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Base URL") },
+                        placeholder = { Text("https://服务商域名/v1") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                    )
+                }
+
+                item {
+                    OutlinedTextField(
+                        value = textForm.model,
+                        onValueChange = viewModel::updateTextModel,
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("模型名") },
+                        placeholder = { Text("例如 qwen-plus") },
+                        singleLine = true,
+                        supportingText = {
+                            Text(
+                                text = textForm.preset.modelHint,
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                        },
+                    )
+                }
+
+                item {
+                    OutlinedTextField(
+                        value = textForm.apiKey,
+                        onValueChange = viewModel::updateTextApiKey,
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("API Key") },
+                        placeholder = { Text("若与视觉服务同一家，可填同一个 Key") },
+                        singleLine = true,
+                        visualTransformation = if (textApiKeyVisible) {
+                            VisualTransformation.None
+                        } else {
+                            PasswordVisualTransformation()
+                        },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        trailingIcon = {
+                            TextButton(onClick = viewModel::toggleTextApiKeyVisible) {
+                                Text(if (textApiKeyVisible) "隐藏" else "显示")
+                            }
+                        },
+                        supportingText = {
+                            Text(
+                                text = "用于生成植物简介、形态、习性、花期等内容",
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                        },
+                    )
+                }
+
+                item {
+                    TestConnectionSection(
+                        testing = testingText,
+                        outcome = textTestOutcome,
+                        onTest = viewModel::testTextConnection,
+                    )
+                }
+            }
+
             item {
                 Button(
                     onClick = viewModel::save,
@@ -250,7 +387,11 @@ private fun SectionTitle(text: String) {
 
 /** 顶部状态卡：一眼看出当前配置缺什么 */
 @Composable
-private fun ConfigStatusCard(form: AiEndpointConfig, hasSavedKey: Boolean) {
+private fun ConfigStatusCard(
+    form: AiEndpointConfig,
+    hasSavedKey: Boolean,
+    textReadiness: String,
+) {
     val isReady = form.isUsable
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -263,16 +404,18 @@ private fun ConfigStatusCard(form: AiEndpointConfig, hasSavedKey: Boolean) {
         ),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
     ) {
+        val contentColor = if (isReady) {
+            MaterialTheme.colorScheme.onPrimaryContainer
+        } else {
+            MaterialTheme.colorScheme.onSecondaryContainer
+        }
+
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
-                text = if (isReady) "配置已就绪" else "尚未配置完成",
+                text = if (isReady) "视觉识别配置已就绪" else "视觉识别配置不完整",
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.Medium,
-                color = if (isReady) {
-                    MaterialTheme.colorScheme.onPrimaryContainer
-                } else {
-                    MaterialTheme.colorScheme.onSecondaryContainer
-                },
+                color = contentColor,
             )
             Spacer(Modifier.height(6.dp))
             Text(
@@ -283,11 +426,13 @@ private fun ConfigStatusCard(form: AiEndpointConfig, hasSavedKey: Boolean) {
                     "还缺少：${form.missingFields.joinToString("、")}"
                 },
                 style = MaterialTheme.typography.bodySmall,
-                color = if (isReady) {
-                    MaterialTheme.colorScheme.onPrimaryContainer
-                } else {
-                    MaterialTheme.colorScheme.onSecondaryContainer
-                },
+                color = contentColor,
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "文字分析：$textReadiness",
+                style = MaterialTheme.typography.labelSmall,
+                color = contentColor,
             )
         }
     }

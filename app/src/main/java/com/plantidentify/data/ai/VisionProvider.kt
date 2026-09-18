@@ -81,7 +81,6 @@ sealed interface ConnectivityResult {
     data class Success(
         val model: String,
         val latencyMs: Long,
-        val acceptsImages: Boolean = true,
     ) : ConnectivityResult
 
     /**

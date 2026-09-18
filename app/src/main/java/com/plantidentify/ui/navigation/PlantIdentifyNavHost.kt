@@ -16,6 +16,7 @@ import com.plantidentify.ui.camera.CameraCaptureScreen
 import com.plantidentify.ui.screens.addplant.AddPlantScreen
 import com.plantidentify.ui.screens.addplant.AddPlantViewModel
 import com.plantidentify.ui.screens.detail.PlantDetailScreen
+import com.plantidentify.ui.screens.detail.PlantDetailViewModel
 import com.plantidentify.ui.screens.home.HomeScreen
 import com.plantidentify.ui.screens.home.HomeViewModel
 import com.plantidentify.ui.screens.observation.ObservationScreen
@@ -131,6 +132,8 @@ fun PlantIdentifyNavHost(
                     imageCompressor = container.imageCompressor,
                     aiSettingsStore = container.aiSettingsStore,
                     visionProvider = container.visionProvider,
+                    textProvider = container.textProvider,
+                    repository = container.plantRepository,
                 ),
             )
 
@@ -140,7 +143,17 @@ fun PlantIdentifyNavHost(
                 // 重新创建 ViewModel 并自动重跑识别（ViewModel 绑在导航条目上）
                 onAddMorePhotos = navController::popBackStack,
                 onOpenSettings = { navController.navigateSingleTop(Routes.SETTINGS) },
+                onOpenPlantDetail = { plantId ->
+                    // 保存成功后进入详情页，并把识别页从返回栈里摘掉 ——
+                    // 否则用户从详情页返回会回到一个「已经保存过」的结果页，
+                    // 再点一次保存就会产生重复档案
+                    navController.navigate(Routes.plantDetail(plantId)) {
+                        popUpTo(Routes.RECOGNITION) { inclusive = true }
+                    }
+                },
                 onRetry = recognitionViewModel::recognize,
+                onSave = recognitionViewModel::saveCurrentResult,
+                onRegenerateAnalysis = recognitionViewModel::regenerateAnalysis,
                 onBack = navController::popBackStack,
             )
         }
@@ -154,6 +167,7 @@ fun PlantIdentifyNavHost(
                 factory = SettingsViewModel.factory(
                     store = container.aiSettingsStore,
                     visionProvider = container.visionProvider,
+                    textProvider = container.textProvider,
                 ),
             )
 
@@ -169,8 +183,20 @@ fun PlantIdentifyNavHost(
                 navArgument(Routes.KEY_PLANT_ID) { type = NavType.LongType },
             ),
         ) { backStackEntry ->
+            val plantId = backStackEntry.arguments?.getLong(Routes.KEY_PLANT_ID) ?: 0L
+
+            val detailViewModel: PlantDetailViewModel = viewModel(
+                factory = PlantDetailViewModel.factory(
+                    plantId = plantId,
+                    repository = container.plantRepository,
+                    textProvider = container.textProvider,
+                    aiSettingsStore = container.aiSettingsStore,
+                ),
+            )
+
             PlantDetailScreen(
-                plantId = backStackEntry.arguments?.getLong(Routes.KEY_PLANT_ID) ?: 0L,
+                imageStore = container.imageStore,
+                viewModel = detailViewModel,
                 onBack = navController::popBackStack,
             )
         }

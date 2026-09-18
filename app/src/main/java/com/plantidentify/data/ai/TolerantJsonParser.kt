@@ -85,6 +85,88 @@ object TolerantJsonParser {
         return ParseAttempt.Failed("返回内容中找不到可解析的 JSON 结构")
     }
 
+    /** 文字分析的解析结果 */
+    sealed interface AnalysisParseResult {
+
+        /**
+         * @param note 非空表示有字段缺失（模型只返回了一部分），UI 可据此提示
+         */
+        data class Ok(val analysis: PlantAnalysis, val note: String? = null) : AnalysisParseResult
+
+        data class Failed(val reason: String) : AnalysisParseResult
+    }
+
+    /**
+     * 解析文字分析（植物百科）的返回。
+     *
+     * 与识别结果共用同一套容错手段（剥围栏、括号配对扫描、键名归一化），
+     * 只是字段不同。
+     *
+     * **这里不支持「降级成半结构化」**：识别结果里「植物名称」是可以单独成立的
+     * 最小信息，而百科的七个字段没有哪个能独立代表一次成功的分析 ——
+     * 一个都拿不到就如实报失败，由调用方按「文字分析失败」处理
+     * （此时基础识别结果照常落库，规格书第三十节）。
+     */
+    fun parseAnalysis(raw: String): AnalysisParseResult {
+        val text = raw.trim()
+        if (text.isEmpty()) {
+            return AnalysisParseResult.Failed("模型返回了空内容")
+        }
+
+        val cleaned = stripCodeFence(text)
+        parseAnalysisObject(cleaned)?.let { return it }
+
+        val extracted = extractFirstJsonObject(cleaned)
+        if (extracted != null && extracted != cleaned) {
+            parseAnalysisObject(extracted)?.let { return it }
+        }
+
+        return AnalysisParseResult.Failed("返回内容中找不到可解析的 JSON 结构")
+    }
+
+    private fun parseAnalysisObject(text: String): AnalysisParseResult? {
+        val root = runCatching { JSONObject(text) }.getOrNull() ?: return null
+
+        val analysis = PlantAnalysis(
+            description = root.readString(
+                "description", "intro", "introduction", "简介", "植物简介", "介绍",
+            ),
+            morphologicalFeatures = root.readString(
+                "morphological_features", "morphologicalfeatures", "morphology",
+                "形态特征", "形态",
+            ),
+            growthHabits = root.readString(
+                "growth_habits", "growthhabits", "habits", "生长习性", "习性",
+            ),
+            floweringPeriod = root.readString(
+                "flowering_period", "floweringperiod", "flowering", "花期",
+            ),
+            fruitingPeriod = root.readString(
+                "fruiting_period", "fruitingperiod", "fruiting", "果期",
+            ),
+            landscapeUses = root.readString(
+                "landscape_uses", "landscapeuses", "uses", "园林用途", "用途",
+            ),
+            careAdvice = root.readString(
+                "care_advice", "careadvice", "care", "养护建议", "养护",
+            ),
+        )
+
+        if (analysis.isEmpty) {
+            return AnalysisParseResult.Failed("JSON 中没有任何可用的内容字段")
+        }
+
+        val got = analysis.presentFields.size
+        return AnalysisParseResult.Ok(
+            analysis = analysis,
+            note = if (got < ANALYSIS_FIELD_COUNT) {
+                "模型只返回了 $got/$ANALYSIS_FIELD_COUNT 个字段，其余为空"
+            } else {
+                null
+            },
+        )
+    }
+
     // ---------------- 内部实现 ----------------
 
     /** 步骤 1：剥离 markdown 代码块围栏 */
@@ -342,6 +424,9 @@ object TolerantJsonParser {
             }
         }.take(MAX_ALTERNATIVES)
     }
+
+    /** 百科分析的字段总数，用于判断模型是否漏了字段 */
+    private const val ANALYSIS_FIELD_COUNT = 7
 
     /** 候选植物最多保留几条 —— 太多反而干扰判断 */
     private const val MAX_ALTERNATIVES = 5
