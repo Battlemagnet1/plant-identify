@@ -1,4 +1,4 @@
-# plant Identify —— 依赖版本目录
+# Plant Identify Library —— 依赖版本目录
 #
 # 【版本策略：为什么不写 Kotlin 2.4.20】
 # AGP 9.0 起内置 Kotlin 支持，且不再允许手动应用 org.jetbrains.kotlin.android。

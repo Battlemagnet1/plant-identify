@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">plant Identify</string>
+    <!-- 应用显示名。桌面图标、系统设置的应用列表、任务切换器都用这里。
+         首页顶栏不再另写一遍，而是读这一个字符串 —— 名称只有一个来源。 -->
+    <string name="app_name">Plant Identify Library</string>
 </resources>

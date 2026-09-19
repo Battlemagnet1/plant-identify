@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -50,10 +51,20 @@ import time
 import urllib.request
 import xml.etree.ElementTree as ET
 
-ADB = "C:/Users/a/Android/Sdk/platform-tools/adb.exe"
-DEVICE = "192.168.253.119:5555"
-MOCK = "http://127.0.0.1:8899"
+# 本机相关的路径都可用环境变量覆盖，避免把某台机器的布局写死在仓库里
+# （与 verify_phase4.py / verify_phase5.py 保持一致）
+ADB = os.environ.get(
+    "ADB",
+    os.path.join(os.environ.get("ANDROID_HOME", "C:/Users/a/Android/Sdk"),
+                 "platform-tools", "adb.exe"),
+)
+DEVICE = os.environ.get("ANDROID_SERIAL", "192.168.253.119:5555")
+MOCK = os.environ.get("MOCK_BASE", "http://127.0.0.1:8899")
 PKG = "com.plantidentify"
+OUT_DIR = os.environ.get(
+    "SHOT_DIR",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, ".workbuddy"),
+)
 
 passed = 0
 failed = 0
@@ -199,7 +210,8 @@ def hide_keyboard() -> None:
 
 
 def shot(name: str) -> None:
-    out = f"d:/Users/a/Desktop/plant Identify/.workbuddy/{name}.png"
+    os.makedirs(OUT_DIR, exist_ok=True)
+    out = os.path.join(OUT_DIR, f"{name}.png")
     raw = adb("exec-out", "screencap", "-p", timeout=60, binary=True)
     with open(out, "wb") as f:
         f.write(raw)

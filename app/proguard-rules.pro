@@ -1,4 +1,4 @@
-# plant Identify —— ProGuard / R8 规则
+# Plant Identify Library —— ProGuard / R8 规则
 #
 # Phase 1 尚未开启混淆（isMinifyEnabled = false），本文件先占位。
 # Phase 7 开启混淆时需补充的规则：

@@ -1,3 +1,7 @@
+// 必须显式 import：Gradle 脚本里 `java` 会被解析成 java 扩展（JavaPluginExtension），
+// 写成 java.util.Properties 会报 Unresolved reference 'util'
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     // AGP 9 内置 Kotlin 支持，不再需要 org.jetbrains.kotlin.android。
@@ -5,6 +9,21 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.ksp)
 }
+
+// ---------- 发布签名 ----------
+// 密钥与口令存在仓库之外：仓库根目录的 keystore.properties（已被 .gitignore 排除），
+// 密钥本体放在用户目录下。这样「仓库将来转公开」时不会连带泄露签名身份。
+//
+// 文件不存在时**静默跳过**而不是报错 —— 别人 clone 下来无需任何密钥即可
+// assembleDebug / assembleRelease（后者产出未签名包）。让构建因为缺少
+// 一个只有维护者才有的文件而失败，是最容易劝退贡献者的做法。
+val keystorePropertiesFile = rootProject.file("keystore.properties")
+val keystoreProperties = Properties().apply {
+    if (keystorePropertiesFile.exists()) {
+        keystorePropertiesFile.inputStream().use { load(it) }
+    }
+}
+val hasReleaseKeystore = !keystoreProperties.getProperty("storeFile").isNullOrBlank()
 
 android {
     namespace = "com.plantidentify"
@@ -28,6 +47,17 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        if (hasReleaseKeystore) {
+            create("release") {
+                storeFile = file(keystoreProperties.getProperty("storeFile"))
+                storePassword = keystoreProperties.getProperty("storePassword")
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
             // 混淆在 Phase 7 再开启，Phase 1 先保证能出包
@@ -36,6 +66,9 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
+            if (hasReleaseKeystore) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 

@@ -21,5 +21,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "plantIdentify"
+rootProject.name = "PlantIdentifyLibrary"
 include(":app")

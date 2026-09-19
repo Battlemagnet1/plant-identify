@@ -24,12 +24,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.plantidentify.BuildConfig
+import com.plantidentify.R
 import com.plantidentify.data.storage.ImageStore
 import com.plantidentify.domain.model.PlantStatistics
 import com.plantidentify.ui.screens.plants.PlantCard
@@ -63,7 +65,9 @@ fun HomeScreen(
                 title = {
                     Column {
                         Text(
-                            text = "plant Identify",
+                            // 用资源而不是硬编码：名称只有一个来源，
+                            // 否则改一次名字就会漏掉一处
+                            text = stringResource(R.string.app_name),
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Medium,
                         )
@@ -307,7 +311,11 @@ private fun EmptyArchiveCard() {
             )
             Spacer(Modifier.height(12.dp))
             Text(
-                text = "当前为 Phase 1：工程骨架、导航与本地数据库已就位，拍照与识别将在后续阶段逐步开放。",
+                // 这里原本写的是「当前为 Phase 1：…拍照与识别将在后续阶段逐步开放」，
+                // 是 Phase 1 的过渡文案。到 Phase 5 功能已齐，这句话会随发布包
+                // 一起发给用户，且与事实不符 —— 改成引导用户做第一步。
+                text = "点右下角「添加植物」拍几张同一株植物的照片，" +
+                    "识别结果会自动整理成档案。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
