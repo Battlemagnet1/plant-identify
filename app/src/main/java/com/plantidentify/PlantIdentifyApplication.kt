@@ -14,11 +14,13 @@ import com.plantidentify.data.draft.CaptureDraftStore
 import com.plantidentify.data.export.DataExporter
 import com.plantidentify.data.export.ReportThumbnailer
 import com.plantidentify.data.image.ImageCompressor
+import com.plantidentify.data.local.Migrations
 import com.plantidentify.data.local.PlantIdentifyDatabase
 import com.plantidentify.data.location.LocationProvider
 import com.plantidentify.data.location.LocationSettingsStore
 import com.plantidentify.data.repository.PlantRepository
 import com.plantidentify.data.storage.ImageStore
+import com.plantidentify.data.storage.MediaSaver
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -56,6 +58,7 @@ class AppContainer(context: Context) {
         )
             // 刻意不调用 fallbackToDestructiveMigration()：
             // 用户档案是长期资产，升级时宁可构建失败暴露问题，也不能静默清空数据。
+            .addMigrations(*Migrations.ALL)
             .build()
     }
 
@@ -81,6 +84,9 @@ class AppContainer(context: Context) {
      * 拒绝授权或解析不出地名都不能影响识别与档案（规格书第十八节）。
      */
     val locationProvider: LocationProvider by lazy { LocationProvider(appContext) }
+
+    /** 把私有目录里的照片导出到系统相册（API 26–28 需先申请存储权限） */
+    val mediaSaver: MediaSaver by lazy { MediaSaver(appContext) }
 
     /** 报告缩略图（1024px / JPEG 75，派生数据放 cacheDir，可重建） */
     private val reportThumbnailer: ReportThumbnailer by lazy { ReportThumbnailer(appContext) }

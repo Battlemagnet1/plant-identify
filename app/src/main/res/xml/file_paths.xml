@@ -1,13 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    FileProvider 可分享的路径（Phase 6：导出 HTML 与备份包）。
+    FileProvider 可分享的路径。
 
-    ## 为什么只开放两个子目录
+    三个子目录，各有明确用途：
 
-    导出物都落在 filesDir 的两个子目录里。**绝不能**写成 `<root-path>` 或
-    `files-path path="."` —— 那会把整个私有目录（含 DataStore 里的
-    AI 配置、以及用户全部原图）都暴露给任何拿到 URI 的应用。
-    只开放 exports/ 与 backups/ 这两个专门放导出物的目录。
+      * exports/  导出的 HTML 报告 / zip   → 分享报告
+      * backups/  备份包 zip               → 分享备份、跨机迁移
+      * images/   用户的植物原图            → 分享单张照片（Phase 6+）
+
+    依然坚持「只开放点名目录」。
+
+    绝不能写成 root-path 或 files-path path="." ——
+    那会把整个私有目录暴露给任何拿到 URI 的应用：DataStore 里的 AI 配置
+    （Base URL、模型名、加密后的 API Key 密文）、草稿、以及全部原图。
+
+    images/ 之所以可以开放，是因为它只装用户自己拍的照片：
+    这些内容本来就属于用户，分享单张照片正是他要做的事；
+    而 DataStore 与其它文件依然在墙外。
+
+    注意 path 必须以斜杠结尾且表示相对 filesDir 的子目录 ——
+    path="images" 与 path="images/" 等价，这里统一带斜杠，避免读起来像文件名。
 -->
 <paths>
     <!-- 导出的 HTML 报告（单文件或 zip） -->
@@ -19,4 +31,9 @@
     <files-path
         name="backups"
         path="backups/" />
+
+    <!-- 用户的植物原图（仅用于「分享这张照片」） -->
+    <files-path
+        name="images"
+        path="images/" />
 </paths>

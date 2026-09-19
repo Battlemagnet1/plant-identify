@@ -35,6 +35,7 @@ data class ReportImage(
 data class ReportPlant(
     val name: String,
     val latinName: String?,
+    val commonNames: String?,
     val family: String?,
     val genus: String?,
     val category: String?,
@@ -46,6 +47,7 @@ data class ReportPlant(
     val fruitingPeriod: String?,
     val landscapeUses: String?,
     val careAdvice: String?,
+    val pestControl: String?,
     val note: String?,
     val observations: List<ReportObservation>,
     val images: List<ReportImage>,
@@ -83,6 +85,7 @@ object HtmlReportBuilder {
         |    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
         |    line-height: 1.7; color: #1f2933; background: #f7f8fa;
         |  }
+        |  body.modal-open { overflow: hidden; }
         |  .page { max-width: 820px; margin: 0 auto; }
         |  h1 { font-size: 28px; margin: 0 0 4px; letter-spacing: .5px; }
         |  .subtitle { color: #6b7280; font-size: 14px; margin-bottom: 28px; }
@@ -95,10 +98,56 @@ object HtmlReportBuilder {
         |  .stat span { color: #6b7280; font-size: 13px; }
         |  .hint { color: #6b7280; font-size: 13px; margin: 10px 0 0; }
         |  hr.sep { border: 0; border-top: 1px solid #e5e7eb; margin: 28px 0; }
-        |  .plant { background: #fff; border: 1px solid #e5e7eb; border-radius: 12px;
-        |           padding: 20px 22px; margin-bottom: 20px; }
-        |  .plant h2 { font-size: 20px; margin: 0 0 14px; }
-        |  .plant h2 .idx { color: #9ca3af; font-weight: 400; margin-right: 8px; }
+        |
+        |  /* 列表：每株植物只显示一个「按钮」—— 编号 + 封面 + 名称/别名/学名。
+        |     完整内容默认收起，点开后在整屏窗口里看，避免一屏铺满几千字。 */
+        |  .plant { margin-bottom: 12px; }
+        |  .plant-head {
+        |    display: flex; gap: 14px; align-items: center; width: 100%;
+        |    text-align: left; font: inherit; color: inherit; cursor: pointer;
+        |    background: #fff; border: 1px solid #e5e7eb; border-radius: 12px;
+        |    padding: 14px 16px;
+        |  }
+        |  .plant-head:hover { border-color: #9ca3af; }
+        |  .plant-head:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }
+        |  .thumb {
+        |    flex: 0 0 auto; width: 72px; height: 72px; border-radius: 8px;
+        |    overflow: hidden; background: #f3f4f6;
+        |    display: flex; align-items: center; justify-content: center;
+        |    color: #9ca3af; font-size: 22px;
+        |  }
+        |  .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+        |  .idx { flex: 0 0 auto; font-size: 13px; color: #9ca3af; font-variant-numeric: tabular-nums; }
+        |  .titles { flex: 1 1 auto; min-width: 0; }
+        |  .cn { display: block; font-size: 17px; font-weight: 600; }
+        |  .alias { display: block; font-size: 13px; color: #6b7280; margin-top: 1px; }
+        |  .latin { display: block; font-size: 13px; color: #6b7280; font-style: italic; }
+        |  .taxon { display: block; font-size: 12px; color: #9ca3af; margin-top: 2px; }
+        |  .chev { flex: 0 0 auto; font-size: 13px; color: #6b7280; white-space: nowrap; }
+        |
+        |  /* 详情：.plant.is-open 时整屏铺开 */
+        |  .plant-body { display: none; }
+        |  .plant.is-open .plant-body {
+        |    display: block; position: fixed; inset: 0; z-index: 60; overflow: auto;
+        |    background: #f7f8fa; padding: 24px 20px 64px;
+        |  }
+        |  .body-inner {
+        |    max-width: 820px; margin: 0 auto; background: #fff;
+        |    border: 1px solid #e5e7eb; border-radius: 12px; padding: 20px 22px;
+        |  }
+        |  .body-head {
+        |    display: flex; align-items: flex-start; justify-content: space-between;
+        |    gap: 12px; margin-bottom: 14px;
+        |  }
+        |  .body-head h2 { font-size: 20px; margin: 0; }
+        |  .body-head .body-sub { font-size: 13px; color: #6b7280; margin-top: 2px; }
+        |  .plant-close {
+        |    flex: 0 0 auto; font: inherit; font-size: 13px; cursor: pointer;
+        |    background: #fff; border: 1px solid #d1d5db; border-radius: 8px;
+        |    padding: 6px 14px; color: #374151;
+        |  }
+        |  .plant-close:hover { background: #f3f4f6; }
+        |
         |  .photos { display: flex; flex-wrap: wrap; gap: 10px; margin: 0 0 16px; }
         |  .photos figure { margin: 0; width: 200px; }
         |  .photos img { width: 100%; border-radius: 8px; display: block; }
@@ -113,7 +162,33 @@ object HtmlReportBuilder {
         |  table.obs th, table.obs td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #eef0f3; }
         |  table.obs th { color: #6b7280; font-weight: 500; }
         |  footer { color: #9ca3af; font-size: 12px; margin-top: 32px; text-align: center; }
+        |
+        |  /* 打印时把全部内容摊平 —— 否则打印出来的报告只有一排按钮，
+        |     而纸面上没法「点击查看」。这是打印与屏幕的真实差别，不是降级。 */
+        |  @media print {
+        |    body { padding: 0; background: #fff; }
+        |    .plant-head { break-inside: avoid; }
+        |    .plant-body { display: block !important; position: static !important;
+        |                  overflow: visible !important; background: #fff !important; padding: 0 !important; }
+        |    .plant-close { display: none; }
+        |    .body-inner { border: 0; padding: 0; max-width: none; }
+        |  }
         |</style>
+        |<!--
+        |  禁用 JavaScript 时的兜底：直接把全部内容摊平显示。
+        |  折叠依赖脚本，脚本没了就必须把内容放出来 ——
+        |  否则用户会拿到一份「每株植物都点不开」的报告。
+        |-->
+        |<noscript>
+        |  <style>
+        |    .plant-body { display: block !important; position: static !important;
+        |                  background: #fff !important; padding: 0 !important; }
+        |    .body-inner { border: 0; padding: 0; max-width: none; }
+        |    .plant-close { display: none; }
+        |    .plant-head { cursor: default; }
+        |    .chev { display: none; }
+        |  </style>
+        |</noscript>
         |</head>
         |<body>
         |<div class="page">
@@ -129,18 +204,85 @@ object HtmlReportBuilder {
         |""".trimMargin()
 
     /**
-     * 一株植物的卡片。
+     * 一株植物：一个「按钮」+ 一份收起的完整内容。
+     *
+     * ## 为什么改成折叠
+     *
+     * 原来每株都把照片、八个百科字段、观察表格全部铺开。13 株就已经是
+     * 一份要滑很久的长文 —— 而报告的第一用途是「快速翻看有哪些植物」，
+     * 不是从头读到尾。折叠保证了：**一屏能看十来株**，
+     * 想看细节再点开。
+     *
+     * 按钮上放的三样东西是刻意的：编号（知道有多少株）、封面（一眼认出）、
+     * 名称 / 别名 / 学名（确认是不是它）。其余一律进弹窗。
+     *
+     * ## 为什么不用 `<details>`
+     *
+     * `<details>` 是内联展开 —— 点开后把下方内容顶下去，在长列表里
+     * 用户会瞬间失去位置感。这里要的是「整一个窗口」，用 `position: fixed`
+     * 的整屏面板更贴近预期。
      *
      * 字段顺序照规格书第二十一节，只渲染有值的字段 —— 一堆空的
      * 「形态特征：—」只会让报告显得像没做完。
      */
     fun plantCard(index: Int, plant: ReportPlant): String = buildString {
+        val no = index.toString().padStart(2, '0')
+        val cover = plant.images.firstOrNull()?.source
+
         append("<section class=\"plant\">\n")
-        append("<h2><span class=\"idx\">")
-        append(index.toString().padStart(2, '0'))
+
+        // ---------- 折叠状态的「按钮」 ----------
+        // 用 <button> 而不是 <div onclick>：焦点、键盘 Enter/Space、
+        // 屏幕阅读器都能直接工作，不必自己补 ARIA 与键盘处理
+        append("<button type=\"button\" class=\"plant-head\">")
+        append("<span class=\"idx\">").append(no).append("</span>")
+        append("<span class=\"thumb\">")
+        if (cover != null) {
+            append("<img src=\"").append(cover)
+                .append("\" alt=\"").append(escape(plant.name)).append("\">")
+        } else {
+            // 没有图时用植物名首字当占位，比一个破图图标有信息量
+            append(escape(plant.name.take(1).ifBlank { "?" }))
+        }
         append("</span>")
-        append(escape(plant.name))
-        append("</h2>\n")
+        append("<span class=\"titles\">")
+        append("<b class=\"cn\">").append(escape(plant.name)).append("</b>")
+        plant.commonNames?.takeIf { it.isNotBlank() }?.let { alias ->
+            append("<span class=\"alias\">别名：").append(escape(alias)).append("</span>")
+        }
+        plant.latinName?.takeIf { it.isNotBlank() }?.let { latin ->
+            append("<i class=\"latin\">").append(escape(latin)).append("</i>")
+        }
+        // family / genus 的值本身就带着「科」「属」二字（如「千屈菜科」「紫薇属」），
+        // 所以只能加前缀标签，不能再拼后缀
+        val taxon = listOfNotNull(
+            plant.family?.takeIf { it.isNotBlank() }?.let { "科 $it" },
+            plant.genus?.takeIf { it.isNotBlank() }?.let { "属 $it" },
+        ).joinToString(" · ")
+        if (taxon.isNotEmpty()) {
+            append("<span class=\"taxon\">").append(escape(taxon)).append("</span>")
+        }
+        append("</span>")
+        append("<span class=\"chev\">查看详情 ›</span>")
+        append("</button>\n")
+
+        // ---------- 展开后的完整内容 ----------
+        append("<div class=\"plant-body\">\n<div class=\"body-inner\">\n")
+
+        append("<div class=\"body-head\"><div>")
+        append("<h2><span class=\"idx\">").append(no).append("</span> ")
+            .append(escape(plant.name)).append("</h2>")
+        val subtitleParts = listOfNotNull(
+            plant.commonNames?.takeIf { it.isNotBlank() }?.let { "别名 $it" },
+            plant.latinName?.takeIf { it.isNotBlank() },
+        )
+        if (subtitleParts.isNotEmpty()) {
+            append("<div class=\"body-sub\">")
+                .append(escape(subtitleParts.joinToString(" · "))).append("</div>")
+        }
+        append("</div>")
+        append("<button type=\"button\" class=\"plant-close\">关闭</button>")
+        append("</div>\n")
 
         if (plant.images.isNotEmpty()) {
             append("<div class=\"photos\">\n")
@@ -164,6 +306,7 @@ object HtmlReportBuilder {
 
         append("<dl>\n")
         field("中文名称", plant.name)
+        field("常用名称 / 俗称", plant.commonNames)
         field("拉丁学名", plant.latinName)
         field("科", plant.family)
         field("属", plant.genus)
@@ -176,6 +319,7 @@ object HtmlReportBuilder {
         field("果期", plant.fruitingPeriod)
         field("园林用途", plant.landscapeUses)
         field("养护建议", plant.careAdvice)
+        field("病虫害防治", plant.pestControl)
         field("备注", plant.note)
         append("</dl>\n")
 
@@ -195,12 +339,56 @@ object HtmlReportBuilder {
             append("</table>\n")
         }
 
-        append("</section>\n")
+        append("</div>\n</div>\n</section>\n")
     }
 
+    /**
+     * 收尾 + 折叠交互。
+     *
+     * ## 为什么可以有一个 `<script>`
+     *
+     * 报告是**单文件、离线、无外部依赖**的：脚本写在文件里，不请求任何 CDN。
+     * 浏览器打开本地 HTML 执行内联脚本没有任何限制（不像 `file://` 下的
+     * fetch/XHR 会被 CORS 拦掉），所以这是可靠的。
+     *
+     * ## 脚本干了什么
+     *
+     * 只做一件事：点按钮时给它所属的 `.plant` 加 `is-open`，
+     * 同时给 `body` 加 `modal-open` 锁滚动。开新的会自动先关掉旧的那个 ——
+     * 否则连点两株植物会叠出两层整屏面板，关掉一层还剩一层。
+     *
+     * 只用了 `classList`，不写 innerHTML、不用任何用户内容拼接字符串，
+     * 所以即便植物名里带 `<script>` 也只是文本（何况服务端早已转义过一遍）。
+     */
     fun documentEnd(disclaimer: String): String = """
         |<footer>${escape(disclaimer)}</footer>
         |</div>
+        |<script>
+        |(function () {
+        |  function closeOpen() {
+        |    var opened = document.querySelector('.plant.is-open');
+        |    if (opened) opened.classList.remove('is-open');
+        |    document.body.classList.remove('modal-open');
+        |  }
+        |  document.querySelectorAll('.plant-head').forEach(function (head) {
+        |    head.addEventListener('click', function () {
+        |      var section = head.closest('.plant');
+        |      if (!section) return;
+        |      closeOpen();
+        |      section.classList.add('is-open');
+        |      document.body.classList.add('modal-open');
+        |      var panel = section.querySelector('.plant-body');
+        |      if (panel && panel.scrollTo) panel.scrollTo(0, 0);
+        |    });
+        |  });
+        |  document.querySelectorAll('.plant-close').forEach(function (button) {
+        |    button.addEventListener('click', closeOpen);
+        |  });
+        |  document.addEventListener('keydown', function (event) {
+        |    if (event.key === 'Escape') closeOpen();
+        |  });
+        |})();
+        |</script>
         |</body>
         |</html>
         |""".trimMargin()

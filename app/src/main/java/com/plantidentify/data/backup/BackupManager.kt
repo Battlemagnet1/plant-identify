@@ -352,6 +352,7 @@ class BackupManager(
                             .put(FIELD_ID, plant.id)
                             .put("name", plant.name)
                             .put("latinName", plant.latinName)
+                            .put("commonNames", plant.commonNames)
                             .put("family", plant.family)
                             .put("genus", plant.genus)
                             .put("category", plant.category)
@@ -363,6 +364,7 @@ class BackupManager(
                             .put("fruitingPeriod", plant.fruitingPeriod)
                             .put("landscapeUses", plant.landscapeUses)
                             .put("careAdvice", plant.careAdvice)
+                            .put("pestControl", plant.pestControl)
                             .put("analysisStatus", plant.analysisStatus.name)
                             .put("note", plant.note)
                             .put("createdAt", plant.createdAt)
@@ -426,6 +428,7 @@ class BackupManager(
                 id = node.getLong(FIELD_ID),
                 name = node.getString("name"),
                 latinName = node.optText("latinName"),
+                commonNames = node.optText("commonNames"),
                 family = node.optText("family"),
                 genus = node.optText("genus"),
                 category = node.optText("category"),
@@ -437,6 +440,7 @@ class BackupManager(
                 fruitingPeriod = node.optText("fruitingPeriod"),
                 landscapeUses = node.optText("landscapeUses"),
                 careAdvice = node.optText("careAdvice"),
+                pestControl = node.optText("pestControl"),
                 // 枚举名认不出来就当没分析过，而不是让整个恢复失败
                 analysisStatus = node.optEnum("analysisStatus", AnalysisStatus.NOT_REQUESTED),
                 note = node.optText("note"),

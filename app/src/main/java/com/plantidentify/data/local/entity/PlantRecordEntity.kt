@@ -34,6 +34,15 @@ data class PlantRecordEntity(
     /** 拉丁学名（归并匹配的第一优先级，务必尽量填全） */
     val latinName: String? = null,
 
+    /**
+     * 常用名称 / 俗称，多个用「、」分隔（如「紫薇花、痒痒树」）。
+     *
+     * 与 [name]（正式中文名）分列两个字段：中文名要承担归并匹配的职责，
+     * 必须稳定、唯一；俗称是给人看的，一个物种可能有五六个，
+     * 混进 name 会让归并判断被别名污染。
+     */
+    val commonNames: String? = null,
+
     /** 科 */
     val family: String? = null,
 
@@ -68,6 +77,9 @@ data class PlantRecordEntity(
 
     /** 养护建议 */
     val careAdvice: String? = null,
+
+    /** 病虫害防治建议 */
+    val pestControl: String? = null,
 
     /** 文字分析状态 —— 失败时基础识别结果仍须保留 */
     val analysisStatus: AnalysisStatus = AnalysisStatus.NOT_REQUESTED,

@@ -128,6 +128,10 @@ object TolerantJsonParser {
         val root = runCatching { JSONObject(text) }.getOrNull() ?: return null
 
         val analysis = PlantAnalysis(
+            commonNames = root.readString(
+                "common_names", "commonnames", "common_name", "commonname",
+                "alias", "aliases", "other_names", "俗称", "别名", "常用名", "常用名称",
+            ),
             description = root.readString(
                 "description", "intro", "introduction", "简介", "植物简介", "介绍",
             ),
@@ -149,6 +153,10 @@ object TolerantJsonParser {
             ),
             careAdvice = root.readString(
                 "care_advice", "careadvice", "care", "养护建议", "养护",
+            ),
+            pestControl = root.readString(
+                "pest_control", "pestcontrol", "pests", "disease_control",
+                "pest_and_disease", "病虫害防治", "病虫害防治建议", "病虫害", "防治",
             ),
         )
 
@@ -425,8 +433,15 @@ object TolerantJsonParser {
         }.take(MAX_ALTERNATIVES)
     }
 
-    /** 百科分析的字段总数，用于判断模型是否漏了字段 */
-    private const val ANALYSIS_FIELD_COUNT = 7
+    /**
+     * 百科内容字段总数，用于判断模型是否漏了字段。
+     *
+     * 口径是 [PlantAnalysis.presentFields] 的字段数（不含 common_names ——
+     * 它不在「植物百科」区块里渲染，见该属性的注释）。
+     * 加字段时这两个数字必须一起改，否则提示会变成
+     * 「模型只返回了 8/7 个字段」这种自相矛盾的话。
+     */
+    private const val ANALYSIS_FIELD_COUNT = 8
 
     /** 候选植物最多保留几条 —— 太多反而干扰判断 */
     private const val MAX_ALTERNATIVES = 5

@@ -23,6 +23,21 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
 
+    <!--
+        Phase 6+：「保存照片到相册」。
+
+        **只在 API 26–28 需要它。** Android 10（API 29）起有了 Scoped Storage，
+        写自己生成的图片到 MediaStore 不再需要任何权限；只有老系统才必须
+        拿 WRITE_EXTERNAL_STORAGE 才能往公共 Pictures/ 目录写。
+
+        `maxSdkVersion="28"` 是关键：不写的话，新系统上应用会**申请一个
+        早就没有任何作用的权限**（系统会直接拒绝），商店审核与用户都会困惑。
+        加了之后，Android 10+ 的设备装出来根本不带这条权限。
+    -->
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+
     <!-- 相机不是必需硬件：无相机的设备也应能安装并使用相册选图 -->
     <uses-feature
         android:name="android.hardware.camera"

@@ -1,5 +1,6 @@
 package com.plantidentify.ui.screens.observation
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -12,6 +13,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -42,10 +44,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.plantidentify.data.local.relation.ObservationWithImages
+import com.plantidentify.data.location.placeText
 import com.plantidentify.data.storage.ImageStore
+import com.plantidentify.data.storage.MediaSaver
 import com.plantidentify.ui.components.BackIconButton
+import com.plantidentify.ui.components.ImageViewerHost
 import com.plantidentify.ui.components.LocalImage
+import com.plantidentify.ui.components.ViewerImage
 import com.plantidentify.ui.components.label
+import com.plantidentify.ui.components.rememberImageViewerState
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -65,6 +72,7 @@ import java.util.Locale
 @Composable
 fun ObservationScreen(
     imageStore: ImageStore,
+    mediaSaver: MediaSaver,
     viewModel: ObservationViewModel,
     onBack: () -> Unit,
     onReanalysisStarted: () -> Unit,
@@ -78,6 +86,16 @@ fun ObservationScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     var editingNoteFor by remember { mutableStateOf<ObservationWithImages?>(null) }
     var deleting by remember { mutableStateOf<ObservationWithImages?>(null) }
+
+    // 全屏查看器：翻页范围是「这一条观察里的照片」——
+    // 从哪条观察点进去就只看哪条，不要跨观察串起来
+    val viewerState = rememberImageViewerState()
+
+    ImageViewerHost(
+        state = viewerState,
+        mediaSaver = mediaSaver,
+        nameHint = plantName,
+    )
 
     LaunchedEffect(message) {
         message?.let {
@@ -194,6 +212,14 @@ fun ObservationScreen(
                     onReanalyze = { viewModel.startReanalysis(item) },
                     onEditNote = { editingNoteFor = item },
                     onDelete = { deleting = item },
+                    onOpenImage = { index ->
+                        viewerState.open(
+                            images = item.images.map {
+                                ViewerImage(imageStore.resolve(it.imagePath), it.role.label)
+                            },
+                            initialIndex = index,
+                        )
+                    },
                 )
             }
             item { Spacer(Modifier.height(24.dp)) }
@@ -209,6 +235,7 @@ private fun ObservationCard(
     onReanalyze: () -> Unit,
     onEditNote: () -> Unit,
     onDelete: () -> Unit,
+    onOpenImage: (Int) -> Unit,
 ) {
     val observation = item.observation
     val recognized = parseRecognition(observation.aiResultJson)
@@ -237,7 +264,13 @@ private fun ObservationCard(
                 }
             }
 
-            observation.locationName?.takeIf { it.isNotBlank() }?.let { place ->
+            // 地名取不到就显示坐标 —— 原来这里只认 locationName，
+            // 而国内 ROM 的反向地理编码经常返回 null，于是「有坐标却什么都不显示」
+            placeText(
+                locationName = observation.locationName,
+                latitude = observation.latitude,
+                longitude = observation.longitude,
+            )?.let { place ->
                 Spacer(Modifier.height(4.dp))
                 Text(
                     text = "地点：$place",
@@ -249,16 +282,17 @@ private fun ObservationCard(
             Spacer(Modifier.height(10.dp))
 
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(item.images, key = { it.id }) { image ->
+                itemsIndexed(item.images, key = { _, image -> image.id }) { index, image ->
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         val file = imageStore.resolve(image.imagePath)
                         if (file.isFile) {
                             LocalImage(
                                 file = file,
-                                contentDescription = image.role.label,
+                                contentDescription = "照片 ${image.role.label}",
                                 modifier = Modifier
                                     .size(84.dp)
-                                    .clip(RoundedCornerShape(10.dp)),
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .clickable { onOpenImage(index) },
                             )
                         }
                         Spacer(Modifier.height(3.dp))

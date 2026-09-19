@@ -42,6 +42,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import android.Manifest
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.plantidentify.data.backup.BackupEntry
 import com.plantidentify.data.export.ExportMode
@@ -72,7 +73,16 @@ fun DataManagementScreen(
     val locationEnabled by viewModel.locationEnabled.collectAsStateWithLifecycle()
 
     val snackbarHostState = remember { SnackbarHostState() }
-    var showLocationHint by remember { mutableStateOf(false) }
+    // 打开开关后给用户的明确交代。用枚举而不是布尔值：
+    // 「已经有权了」「刚授权成功」「被拒了」是三件不同的事，
+    // 之前只有一句「下次进添加页会申请」—— 而那句话是假的。
+    var locationHint by remember { mutableStateOf<LocationHint?>(null) }
+
+    val locationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        locationHint = if (granted) LocationHint.GRANTED else LocationHint.DENIED
+    }
 
     // 恢复备份：用系统文件选择器。用 */* 而不是只写 application/zip ——
     // 各家文件提供方对 zip 的 MIME 报法不一致，选不出来比选错更让人困惑，
@@ -124,7 +134,18 @@ fun DataManagementScreen(
                 enabled = locationEnabled,
                 onToggle = { checked ->
                     viewModel.setLocationEnabled(checked)
-                    if (checked) showLocationHint = true
+                    if (!checked) {
+                        locationHint = null
+                    } else if (viewModel.hasLocationPermission()) {
+                        locationHint = LocationHint.ALREADY
+                    } else {
+                        // 开关只是「用户愿意记录」，坐标还得靠系统权限。
+                        // 既然用户此刻正在做这个决定，就顺手把权限问了 ——
+                        // 拖到别处再问，用户根本不知道还有一步没做
+                        locationPermissionLauncher.launch(
+                            Manifest.permission.ACCESS_COARSE_LOCATION,
+                        )
+                    }
                 },
             )
 
@@ -220,22 +241,44 @@ fun DataManagementScreen(
         )
     }
 
-    if (showLocationHint) {
+    locationHint?.let { hint ->
         AlertDialog(
-            onDismissRequest = { showLocationHint = false },
-            title = { Text("还需要系统定位权限") },
-            text = {
-                Text(
-                    "已开启地点记录，但要真正取到位置还需要系统定位权限。\n\n" +
-                        "下次进入「添加植物」页时系统会向你申请；" +
-                        "拒绝也不影响拍照、识别与档案。",
-                )
-            },
+            onDismissRequest = { locationHint = null },
+            title = { Text(hint.title) },
+            text = { Text(hint.body) },
             confirmButton = {
-                TextButton(onClick = { showLocationHint = false }) { Text("知道了") }
+                TextButton(onClick = { locationHint = null }) { Text("知道了") }
             },
         )
     }
+}
+
+/**
+ * 打开位置开关后的三种结果。
+ *
+ * 分开表达的原因：这三种情况下应用**能做到的事完全不同**，
+ * 用一句笼统的「已开启」盖过去，用户下次发现没记上地点时
+ * 只会觉得是应用坏了。
+ */
+private enum class LocationHint(val title: String, val body: String) {
+    ALREADY(
+        title = "已开启地点记录",
+        body = "定位权限也已就绪。保存植物档案时会一并记下拍摄地点，" +
+            "地点只存在本机，不会上传。",
+    ),
+    GRANTED(
+        title = "已开启并获得定位权限",
+        body = "之后保存植物档案时会一并记下拍摄地点。" +
+            "地点只存在本机，不会上传。",
+    ),
+    DENIED(
+        title = "缺少定位权限",
+        body = "开关已经打开，但系统定位权限被拒绝，" +
+            "暂时记不了地点。\n\n" +
+            "可以稍后在手机「设置 → 应用 → 权限」里授予；" +
+            "也可以在「添加植物」页的地点行上点一下重试。\n\n" +
+            "不影响拍照、识别与档案。",
+    ),
 }
 
 @Composable

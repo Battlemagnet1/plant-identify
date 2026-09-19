@@ -90,8 +90,10 @@ fun PlantIdentifyNavHost(
             val importing by addPlantViewModel.importing.collectAsStateWithLifecycle()
             val message by addPlantViewModel.message.collectAsStateWithLifecycle()
             val uploadPlan by addPlantViewModel.uploadPlan.collectAsStateWithLifecycle()
+            val locationUi by addPlantViewModel.locationUi.collectAsStateWithLifecycle()
+            val requestLocationPermission by
+                addPlantViewModel.requestLocationPermission.collectAsStateWithLifecycle()
             val askLocation by addPlantViewModel.askLocation.collectAsStateWithLifecycle()
-            val locationSummary by addPlantViewModel.locationSummary.collectAsStateWithLifecycle()
 
             // 相机页拍完回传的临时文件路径
             val capturedTempPath by backStackEntry.savedStateHandle
@@ -106,9 +108,13 @@ fun PlantIdentifyNavHost(
                 imageStore = container.imageStore,
                 capturedTempPath = capturedTempPath,
                 askLocation = askLocation,
-                locationSummary = locationSummary,
+                locationUi = locationUi,
+                requestLocationPermission = requestLocationPermission,
                 onLocationAllowed = addPlantViewModel::onLocationAllowed,
                 onLocationDenied = addPlantViewModel::onLocationDenied,
+                onLocationPermissionDenied = addPlantViewModel::onLocationPermissionDenied,
+                onLocationPermissionRequested = addPlantViewModel::consumeLocationPermissionRequest,
+                onRetryLocation = addPlantViewModel::retryLocation,
                 onCaptureLocation = addPlantViewModel::captureLocation,
                 onCapturedTempConsumed = {
                     backStackEntry.savedStateHandle.remove<String>(Routes.KEY_CAPTURED_TEMP_PATH)
@@ -212,6 +218,7 @@ fun PlantIdentifyNavHost(
                     exporter = container.dataExporter,
                     backupManager = container.backupManager,
                     locationSettingsStore = container.locationSettingsStore,
+                    locationProvider = container.locationProvider,
                 ),
             )
             DataManagementScreen(
@@ -257,6 +264,7 @@ fun PlantIdentifyNavHost(
 
             PlantDetailScreen(
                 imageStore = container.imageStore,
+                mediaSaver = container.mediaSaver,
                 viewModel = detailViewModel,
                 onBack = navController::popBackStack,
                 onEdit = { id -> navController.navigateSingleTop(Routes.plantEdit(id)) },
@@ -286,6 +294,7 @@ fun PlantIdentifyNavHost(
             )
 
             PlantEditScreen(
+                imageStore = container.imageStore,
                 viewModel = editViewModel,
                 onBack = navController::popBackStack,
                 // 保存成功后退回详情页，让用户立刻看到改动结果
@@ -313,6 +322,7 @@ fun PlantIdentifyNavHost(
 
             ObservationScreen(
                 imageStore = container.imageStore,
+                mediaSaver = container.mediaSaver,
                 viewModel = observationViewModel,
                 onBack = navController::popBackStack,
                 // 补图重识别：草稿已装好，去添加页继续加图并重新识别
@@ -341,6 +351,7 @@ fun PlantIdentifyNavHost(
 
             ObservationScreen(
                 imageStore = container.imageStore,
+                mediaSaver = container.mediaSaver,
                 viewModel = observationViewModel,
                 onBack = navController::popBackStack,
                 onReanalysisStarted = {

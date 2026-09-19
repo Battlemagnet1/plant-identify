@@ -43,6 +43,9 @@ interface ObservationImageDao {
     @Query("SELECT * FROM observation_image WHERE observationId = :observationId ORDER BY sortOrder ASC")
     fun observeByObservation(observationId: Long): Flow<List<ObservationImageEntity>>
 
+    @Query("SELECT * FROM observation_image WHERE id = :imageId")
+    suspend fun getById(imageId: Long): ObservationImageEntity?
+
     @Query("SELECT * FROM observation_image WHERE observationId = :observationId ORDER BY sortOrder ASC")
     suspend fun getByObservation(observationId: Long): List<ObservationImageEntity>
 

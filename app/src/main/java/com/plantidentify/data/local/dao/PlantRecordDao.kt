@@ -30,6 +30,17 @@ interface PlantRecordDao {
     @Query("DELETE FROM plant_record WHERE id = :plantId")
     suspend fun deleteById(plantId: Long)
 
+    /**
+     * 只刷新「最近更新」时间。
+     *
+     * 照片增删改的是观察与图片两张表，但列表按 `plant_record.updatedAt` 排序 ——
+     * 不刷这一下，刚改完照片的档案会一直沉在列表底部，
+     * 用户会以为修改没生效。整体 `update(entity)` 也能做到，
+     * 但它会把整行重写一遍，存在并发下覆盖别处刚写入字段的风险。
+     */
+    @Query("UPDATE plant_record SET updatedAt = :timestamp WHERE id = :plantId")
+    suspend fun touch(plantId: Long, timestamp: Long = System.currentTimeMillis())
+
     // ---------- 读取 ----------
 
     @Query("SELECT * FROM plant_record ORDER BY updatedAt DESC")

@@ -8,11 +8,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -48,11 +49,18 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.plantidentify.data.ai.RecognitionResult
 import com.plantidentify.data.local.entity.AnalysisStatus
+import com.plantidentify.data.local.entity.ObservationImageEntity
 import com.plantidentify.data.local.entity.PlantRecordEntity
+import com.plantidentify.data.location.placeText
 import com.plantidentify.data.storage.ImageStore
+import com.plantidentify.data.storage.MediaSaver
 import com.plantidentify.domain.model.ConfidenceGrade
 import com.plantidentify.ui.components.BackIconButton
+import com.plantidentify.ui.components.ImageViewerHost
 import com.plantidentify.ui.components.LocalImage
+import com.plantidentify.ui.components.ViewerImage
+import com.plantidentify.ui.components.label
+import com.plantidentify.ui.components.rememberImageViewerState
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -79,6 +87,7 @@ import kotlin.math.roundToInt
 @Composable
 fun PlantDetailScreen(
     imageStore: ImageStore,
+    mediaSaver: MediaSaver,
     viewModel: PlantDetailViewModel,
     onBack: () -> Unit,
     onEdit: (Long) -> Unit,
@@ -95,6 +104,10 @@ fun PlantDetailScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     var confirmDelete by remember { mutableStateOf(false) }
 
+    // 大图查看器挂在这一层，照片横条与观察卡片共用同一个实例 ——
+    // 两张照片列表点开的是同一个查看器，翻页范围由各自的列表决定
+    val viewerState = rememberImageViewerState()
+
     LaunchedEffect(message) {
         message?.let {
             snackbarHostState.showSnackbar(it)
@@ -106,6 +119,12 @@ fun PlantDetailScreen(
     LaunchedEffect(deleted) {
         if (deleted) onDeleted()
     }
+
+    ImageViewerHost(
+        state = viewerState,
+        mediaSaver = mediaSaver,
+        nameHint = detail?.plant?.name.orEmpty(),
+    )
 
     if (confirmDelete) {
         val observationCount = detail?.observations?.size ?: 0
@@ -198,9 +217,15 @@ fun PlantDetailScreen(
             if (images.isNotEmpty()) {
                 item {
                     PhotoStrip(
-                        paths = images.map { it.imagePath },
+                        images = images,
                         imageStore = imageStore,
                         observationCount = detail?.observations?.size ?: 0,
+                        onOpen = { index ->
+                            viewerState.open(
+                                images = images.map { ViewerImage(imageStore.resolve(it.imagePath), it.role.label) },
+                                initialIndex = index,
+                            )
+                        },
                     )
                 }
             }
@@ -218,7 +243,6 @@ fun PlantDetailScreen(
                 ObservationSummaryCard(
                     plantId = plant.id,
                     observations = detail?.observations.orEmpty(),
-                    imageStore = imageStore,
                     onOpenObservations = onOpenObservations,
                 )
             }
@@ -254,6 +278,17 @@ private fun IdentityCard(plant: PlantRecordEntity) {
                     style = MaterialTheme.typography.titleSmall,
                     fontStyle = FontStyle.Italic,
                     color = MaterialTheme.colorScheme.onPrimaryContainer,
+                )
+            }
+
+            // 俗称放在学名下面、科属上面：它是「这株植物还可能叫什么」，
+            // 与人辨认植物的顺序一致（先想它叫什么，再看它属于哪一科）
+            plant.commonNames?.takeIf { it.isNotBlank() }?.let { alias ->
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = "俗称：$alias",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f),
                 )
             }
 
@@ -332,12 +367,19 @@ private fun ConfidenceCard(plant: PlantRecordEntity) {
     }
 }
 
-/** 照片横条 —— 展示本次观察的全部照片（含部位标注） */
+/**
+ * 照片横条 —— 展示这株植物的全部照片（含部位标注）。
+ *
+ * 每张图可点：进入全屏查看器，可缩放、可保存到相册、可分享。
+ * 没有点击入口时，用户看着缩略图却点不动，只能去系统相册里找原图 ——
+ * 而原图存在应用私有目录，系统相册根本看不到。
+ */
 @Composable
 private fun PhotoStrip(
-    paths: List<String>,
+    images: List<ObservationImageEntity>,
     imageStore: ImageStore,
     observationCount: Int,
+    onOpen: (Int) -> Unit,
 ) {
     Column {
         Row(
@@ -352,20 +394,21 @@ private fun PhotoStrip(
                 color = MaterialTheme.colorScheme.onSurface,
             )
             Text(
-                text = "${paths.size} 张 · ${observationCount} 次观察",
+                text = "${images.size} 张 · ${observationCount} 次观察 · 点击看大图",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
         Spacer(Modifier.height(8.dp))
         LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            items(paths, key = { it }) { path ->
+            itemsIndexed(images, key = { _, image -> image.id }) { index, image ->
                 LocalImage(
-                    file = imageStore.resolve(path),
-                    contentDescription = "植物照片",
+                    file = imageStore.resolve(image.imagePath),
+                    contentDescription = "植物照片 ${image.role.label}",
                     modifier = Modifier
                         .size(120.dp)
-                        .clip(RoundedCornerShape(12.dp)),
+                        .clip(RoundedCornerShape(12.dp))
+                        .clickable { onOpen(index) },
                 )
             }
         }
@@ -545,16 +588,25 @@ private fun AlternativesCard(alternatives: List<RecognitionResult.Alternative>) 
  *
  * 只给摘要与入口，具体列表在观察记录页 ——
  * 详情页已经有百科等长内容，把观察逐条铺开会让页面失控地长。
+ *
+ * **地点取最近一次观察的**：用户打开一份档案想确认的通常是
+ * 「我最近一次是在哪儿见到它的」，而不是第一次。
  */
 @Composable
 private fun ObservationSummaryCard(
     plantId: Long,
     observations: List<com.plantidentify.data.local.relation.ObservationWithImages>,
-    imageStore: ImageStore,
     onOpenObservations: (Long) -> Unit,
 ) {
     val firstAt = observations.minOfOrNull { it.observation.timestamp }
     val latestAt = observations.maxOfOrNull { it.observation.timestamp }
+
+    // 地点三件套：优先地名，地名取不到（国内 ROM 的反向地理编码经常返回 null）
+    // 就退化成经纬度 —— 有个坐标总比整行消失有用
+    val latestPlace = observations
+        .maxByOrNull { it.observation.timestamp }
+        ?.observation
+        ?.let { placeText(it.locationName, it.latitude, it.longitude) }
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -570,6 +622,7 @@ private fun ObservationSummaryCard(
 
             SummaryRow("首次观察", firstAt?.let { formatDate(it) } ?: "—")
             SummaryRow("最近观察", latestAt?.let { formatDate(it) } ?: "—")
+            SummaryRow("最近地点", latestPlace ?: "未记录")
             SummaryRow("观察次数", observations.size.toString())
             SummaryRow("照片总数", observations.sumOf { it.images.size }.toString())
 
@@ -633,4 +686,5 @@ private fun analysisSections(plant: PlantRecordEntity): List<Pair<String, String
     plant.fruitingPeriod?.takeIf { it.isNotBlank() }?.let { add("果期" to it) }
     plant.landscapeUses?.takeIf { it.isNotBlank() }?.let { add("园林用途" to it) }
     plant.careAdvice?.takeIf { it.isNotBlank() }?.let { add("养护建议" to it) }
+    plant.pestControl?.takeIf { it.isNotBlank() }?.let { add("病虫害防治" to it) }
 }

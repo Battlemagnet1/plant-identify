@@ -34,7 +34,7 @@ import com.plantidentify.data.local.entity.PlantRecordEntity
         PlantObservationEntity::class,
         ObservationImageEntity::class,
     ],
-    version = 1,
+    version = 2,
     exportSchema = true,
 )
 abstract class PlantIdentifyDatabase : RoomDatabase() {

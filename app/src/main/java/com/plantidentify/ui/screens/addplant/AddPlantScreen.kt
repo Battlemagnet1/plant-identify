@@ -5,6 +5,7 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -77,9 +78,13 @@ fun AddPlantScreen(
     imageStore: ImageStore,
     capturedTempPath: String?,
     askLocation: Boolean,
-    locationSummary: String?,
+    locationUi: LocationUiState,
+    requestLocationPermission: Boolean,
     onLocationAllowed: () -> Unit,
     onLocationDenied: () -> Unit,
+    onLocationPermissionDenied: () -> Unit,
+    onLocationPermissionRequested: () -> Unit,
+    onRetryLocation: () -> Unit,
     onCaptureLocation: () -> Unit,
     onCapturedTempConsumed: () -> Unit,
     onImportUris: (List<Uri>) -> Unit,
@@ -127,8 +132,23 @@ fun AddPlantScreen(
     val locationPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
-        // 授权后才去取坐标；被拒就什么都不做
-        if (granted) onCaptureLocation()
+        if (granted) {
+            onCaptureLocation()
+        } else {
+            // 被拒不是“什么都不做”：要让界面知道，
+            // 否则地点行会一直停在「正在获取…」，看起来像卡住了
+            onLocationPermissionDenied()
+        }
+    }
+
+    // 已开关但没权限时，页面一进来就补申请 ——
+    // 用户在「数据管理」里打开开关后不会再经过询问框，
+    // 权限只能靠这里补上（否则就是「开了开关却永远没地点」）
+    LaunchedEffect(requestLocationPermission) {
+        if (requestLocationPermission) {
+            onLocationPermissionRequested()
+            locationPermissionLauncher.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
+        }
     }
 
     // 相机拍完回传的临时文件：导入正式目录并消费掉
@@ -177,14 +197,15 @@ fun AddPlantScreen(
                 )
             }
 
-            // 地点是可选的：取不到就整行不显示，而不是显示「未知位置」占位 ——
-            // 后者会让人以为定位坏了
-            locationSummary?.let { summary ->
+            // 地点行。以前只在“真的拿到了地名”时才显示，
+            // 于是失败与未开启在界面上完全一样 ——
+            // 用户看到的就是「开了功能，但什么都没发生」。
+            // 现在每种状态都有明确的一行字，失败时还可以点一下重试。
+            if (locationUi != LocationUiState.Hidden) {
                 item {
-                    Text(
-                        text = "📍 $summary",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    LocationRow(
+                        state = locationUi,
+                        onAction = onRetryLocation,
                     )
                 }
             }
@@ -298,6 +319,36 @@ fun AddPlantScreen(
             dismissButton = {
                 TextButton(onClick = onLocationDenied) { Text("暂不允许") }
             },
+        )
+    }
+}
+
+/**
+ * 地点状态行。
+ *
+ * 每种状态都给出明确叙述，而不是“有就显示、没有就消失” ——
+ * 后者让用户无法判断到底是功能没开、还是定位坏了。
+ */
+@Composable
+private fun LocationRow(state: LocationUiState, onAction: () -> Unit) {
+    val (text, actionable) = when (state) {
+        LocationUiState.Hidden -> return
+        LocationUiState.NeedPermission -> "📍 未获得定位权限 · 点此授权" to true
+        LocationUiState.Fetching -> "📍 正在获取地点…" to false
+        LocationUiState.Unavailable -> "📍 未能获取位置 · 点此重试" to true
+        is LocationUiState.Ready -> "📍 ${state.text}" to true
+    }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(if (actionable) Modifier.clickable(onClick = onAction) else Modifier),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }

@@ -13,6 +13,7 @@ import com.plantidentify.data.export.DataExporter
 import com.plantidentify.data.export.ExportEstimate
 import com.plantidentify.data.export.ExportMode
 import com.plantidentify.data.export.formatBytes
+import com.plantidentify.data.location.LocationProvider
 import com.plantidentify.data.location.LocationSettingsStore
 import com.plantidentify.data.repository.PlantRepository
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -66,6 +67,7 @@ class DataManagementViewModel(
     private val exporter: DataExporter,
     private val backupManager: BackupManager,
     private val locationSettingsStore: LocationSettingsStore,
+    private val locationProvider: LocationProvider,
 ) : ViewModel() {
 
     private val _task = MutableStateFlow<DataTask>(DataTask.Idle)
@@ -141,6 +143,15 @@ class DataManagementViewModel(
     fun setLocationEnabled(enabled: Boolean) {
         viewModelScope.launch { locationSettingsStore.setEnabled(enabled) }
     }
+
+    /**
+     * 系统定位权限是否已授予。
+     *
+     * 界面用它决定「打开开关时要不要顺手把权限也申请了」。
+     * 这一步是必须的：开关本身只是一条用户意愿的记录，
+     * **没有权限就一个坐标也拿不到**，而用户不会知道这两件事是分开的。
+     */
+    fun hasLocationPermission(): Boolean = locationProvider.hasPermission()
 
     // ---------------------------------------------------------------- 导出
 
@@ -273,9 +284,16 @@ class DataManagementViewModel(
             exporter: DataExporter,
             backupManager: BackupManager,
             locationSettingsStore: LocationSettingsStore,
+            locationProvider: LocationProvider,
         ): ViewModelProvider.Factory = viewModelFactory {
             initializer {
-                DataManagementViewModel(repository, exporter, backupManager, locationSettingsStore)
+                DataManagementViewModel(
+                    repository,
+                    exporter,
+                    backupManager,
+                    locationSettingsStore,
+                    locationProvider,
+                )
             }
         }
     }

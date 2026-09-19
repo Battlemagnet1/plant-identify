@@ -2,6 +2,7 @@ package com.plantidentify.data.export
 
 import android.content.Context
 import com.plantidentify.data.local.relation.PlantWithObservationsAndImages
+import com.plantidentify.data.location.placeText
 import com.plantidentify.data.storage.ImageStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -226,6 +227,7 @@ class DataExporter(
         return ReportPlant(
             name = plant.name,
             latinName = plant.latinName,
+            commonNames = plant.commonNames,
             family = plant.family,
             genus = plant.genus,
             category = plant.category,
@@ -237,24 +239,24 @@ class DataExporter(
             fruitingPeriod = plant.fruitingPeriod,
             landscapeUses = plant.landscapeUses,
             careAdvice = plant.careAdvice,
+            pestControl = plant.pestControl,
             note = plant.note,
             observations = item.observations.map { observation ->
                 ReportObservation(
                     timeText = formatTime(observation.observation.timestamp),
                     // 优先地名，取不到就退化成经纬度 —— 规格书要求显示地名而非坐标，
-                    // 但「有个坐标」总比「什么都没有」有用
-                    place = observation.observation.locationName
-                        ?: coordinatesOf(observation.observation.latitude, observation.observation.longitude),
+                    // 但「有个坐标」总比「什么都没有」有用。
+                    // 口径与 App 内的观察记录页共用 placeText，两处不会跑偏
+                    place = placeText(
+                        locationName = observation.observation.locationName,
+                        latitude = observation.observation.latitude,
+                        longitude = observation.observation.longitude,
+                    ),
                     note = observation.observation.note,
                 )
             },
             images = images,
         )
-    }
-
-    private fun coordinatesOf(latitude: Double?, longitude: Double?): String? {
-        if (latitude == null || longitude == null) return null
-        return "%.4f, %.4f".format(latitude, longitude)
     }
 
     private companion object {

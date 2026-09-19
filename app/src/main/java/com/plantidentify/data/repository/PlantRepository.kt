@@ -1,5 +1,6 @@
 package com.plantidentify.data.repository
 
+import android.net.Uri
 import androidx.room.withTransaction
 import com.plantidentify.data.ai.PlantAnalysis
 import com.plantidentify.data.ai.RecognitionResult
@@ -8,6 +9,7 @@ import com.plantidentify.data.draft.CaptureDraftStore
 import com.plantidentify.data.draft.DraftImage
 import com.plantidentify.data.local.PlantIdentifyDatabase
 import com.plantidentify.data.local.entity.AnalysisStatus
+import com.plantidentify.data.local.entity.ImageRole
 import com.plantidentify.data.local.entity.ObservationImageEntity
 import com.plantidentify.data.local.entity.PlantObservationEntity
 import com.plantidentify.data.local.entity.PlantRecordEntity
@@ -248,6 +250,9 @@ class PlantRepository(
 
         plantRecordDao.update(
             existing.copy(
+                // 别名与百科字段一样，来自文字分析；为空时保留原值，
+                // 避免一次「模型没给出别名」的重新生成把用户手填的俗称抹掉
+                commonNames = analysis?.commonNames ?: existing.commonNames,
                 description = analysis?.description ?: existing.description,
                 morphologicalFeatures = analysis?.morphologicalFeatures
                     ?: existing.morphologicalFeatures,
@@ -256,6 +261,7 @@ class PlantRepository(
                 fruitingPeriod = analysis?.fruitingPeriod ?: existing.fruitingPeriod,
                 landscapeUses = analysis?.landscapeUses ?: existing.landscapeUses,
                 careAdvice = analysis?.careAdvice ?: existing.careAdvice,
+                pestControl = analysis?.pestControl ?: existing.pestControl,
                 analysisStatus = status,
                 updatedAt = System.currentTimeMillis(),
             ),
@@ -443,19 +449,43 @@ class PlantRepository(
 
     // ---------------- 编辑与删除 ----------------
     /**
-     * 更新档案的**人工可编辑字段**。
+     * 更新档案的**全部可编辑内容**。
      *
-     * 刻意只开放这几项：名称/学名/科/属/类型/备注。
-     * 置信度、百科内容、观察记录都不在此列 —— 前者是 AI 结论的记录，
-     * 后两者由各自的流程维护，允许在这里随意改写会让数据失去可追溯性。
+     * ## 为什么不再锁死「AI 结论」
+     *
+     * 早期版本只开放名称/学名/科/属/类型，理由是「改写 AI 结论会让档案
+     * 失去可追溯性」。但实际用下来这条原则是错的：**AI 确实会认错**，
+     * 而用户手上就有那株植物 —— 他要的是把错的地方改对，
+     * 不是为了保全 AI 的原始输出而被迫留着一个错误的名字。
+     *
+     * 可追溯性由**观察记录里的 `aiResultJson`** 保证：模型当初返回了什么，
+     * 一个字都没动地存在那儿。档案上的字段是「当前认为正确的结论」，
+     * 两者的职责本来就不同。
+     *
+     * ## 不在这里改的东西
+     *
+     * - `analysisStatus`：由分析流程维护的状态机，让用户改没有意义
+     * - `createdAt` / `updatedAt`：前者是事实，后者由本方法刷新
+     * - 观察的 `timestamp` / 经纬度 / 地名：那是「某次观察在哪儿」的事实记录，
+     *   不是 AI 的判断，改它等于篡改观察日志
      */
     suspend fun updatePlantInfo(
         plantId: Long,
         name: String,
         latinName: String?,
+        commonNames: String?,
         family: String?,
         genus: String?,
         category: String?,
+        confidence: Double,
+        description: String?,
+        morphologicalFeatures: String?,
+        growthHabits: String?,
+        floweringPeriod: String?,
+        fruitingPeriod: String?,
+        landscapeUses: String?,
+        careAdvice: String?,
+        pestControl: String?,
         note: String?,
     ): Result<Unit> = runCatching {
         val existing = plantRecordDao.getById(plantId)
@@ -464,14 +494,112 @@ class PlantRepository(
         plantRecordDao.update(
             existing.copy(
                 name = name.trim(),
-                latinName = latinName?.trim()?.takeIf { it.isNotEmpty() },
-                family = family?.trim()?.takeIf { it.isNotEmpty() },
-                genus = genus?.trim()?.takeIf { it.isNotEmpty() },
-                category = category?.trim()?.takeIf { it.isNotEmpty() },
-                note = note?.trim()?.takeIf { it.isNotEmpty() },
+                latinName = latinName.clean(),
+                commonNames = commonNames.clean(),
+                family = family.clean(),
+                genus = genus.clean(),
+                category = category.clean(),
+                // 置信度是 0.0~1.0 的比例值；界面按百分数输入，转换在这里收口
+                confidence = confidence.coerceIn(0.0, 1.0),
+                description = description.clean(),
+                morphologicalFeatures = morphologicalFeatures.clean(),
+                growthHabits = growthHabits.clean(),
+                floweringPeriod = floweringPeriod.clean(),
+                fruitingPeriod = fruitingPeriod.clean(),
+                landscapeUses = landscapeUses.clean(),
+                careAdvice = careAdvice.clean(),
+                pestControl = pestControl.clean(),
+                note = note.clean(),
                 updatedAt = System.currentTimeMillis(),
             ),
         )
+    }
+
+    /** 去掉首尾空白；空串与全空白一律存成 null，「空」在库里只有一种表示 */
+    private fun String?.clean(): String? = this?.trim()?.takeIf { it.isNotEmpty() }
+
+    /**
+     * 向一条已有观察追加照片。
+     *
+     * ## 为什么不走「补图重识别」
+     *
+     * 那条路径会把整个观察的图片行删掉重建，并**强制重跑一次 AI 识别**。
+     * 用户想做的可能只是「当时漏传了一张叶子」，为此付一次 API 调用、
+     * 外加结论被改写的风险，代价明显不对等。这里只做纯粹的文件 + 行插入。
+     *
+     * 新的照片落 `role = UNKNOWN`（用户没标部位）与末尾 `sortOrder`，
+     * 因此**不会抢走封面** —— 封面的选取规则见 [PlantRecordDao.observePlantCards]。
+     */
+    suspend fun addImagesToObservation(
+        observationId: Long,
+        uris: List<Uri>,
+    ): Result<Int> = runCatching {
+        if (uris.isEmpty()) error("没有选择照片")
+
+        val observation = observationDao.getById(observationId)
+            ?: error("观察记录不存在")
+
+        // 先全部落盘，再一次性入库：中途某张读不出来时，
+        // 已导入的文件要回收，否则会在 filesDir 里留下没人引用的孤儿图
+        val imported = mutableListOf<String>()
+        try {
+            uris.forEach { uri ->
+                imageStore.importFromUri(uri)
+                    .onSuccess { imported += it }
+            }
+            if (imported.isEmpty()) error("所选照片都无法读取")
+
+            var order = imageDao.maxSortOrder(observationId) + 1
+            imageDao.insertAll(
+                imported.map { path ->
+                    ObservationImageEntity(
+                        observationId = observationId,
+                        imagePath = path,
+                        role = ImageRole.UNKNOWN,
+                        sortOrder = order++,
+                    )
+                },
+            )
+            plantRecordDao.touch(observation.plantId)
+            imported.size
+        } catch (error: Throwable) {
+            imported.forEach { imageStore.delete(it) }
+            throw error
+        }
+    }
+
+    /**
+     * 删除一张照片（数据库行 + 磁盘文件）。
+     *
+     * ## 为什么拒绝删掉最后一张
+     *
+     * 档案没有照片就变成空壳：列表没有封面、补图重识别无从谈起、
+     * 备份恢复后也没法核对。与其让用户走到那一步再解释，
+     * 不如在点下去的时候就说清楚。
+     *
+     * ## 文件为什么要看引用计数
+     *
+     * 同一个文件可能被多条观察引用（同一批照片保存到两个档案）。
+     * 直接删文件会让另一份档案的照片变成空白 —— 行删了、文件还在，
+     * 只是浪费空间；行还在、文件没了，就是数据损坏。
+     */
+    suspend fun deleteObservationImage(imageId: Long): Result<Unit> = runCatching {
+        val image = imageDao.getById(imageId) ?: error("照片不存在")
+        val observation = observationDao.getById(image.observationId)
+            ?: error("观察记录不存在")
+
+        // 「最后一张」按整株植物算，而不是按这次观察 —— 用户看到的是
+        // 这株植物还有几张照片，不是这条观察还有几张
+        val plantPhotoCount = imageDao.getImagesForPlant(observation.plantId).size
+        if (plantPhotoCount <= 1) error("这株植物只剩这一张照片了，删掉就没有封面了")
+
+        imageDao.deleteById(imageId)
+        // 先删行再判引用：此时这一行已经不在了，计数为 0 才是真的没人用
+        if (imageDao.countByPath(image.imagePath) == 0) {
+            imageStore.delete(image.imagePath)
+        }
+        plantRecordDao.touch(observation.plantId)
+        Unit
     }
 
     /** 更新某次观察的备注 */

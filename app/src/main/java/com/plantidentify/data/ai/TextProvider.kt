@@ -31,6 +31,14 @@ data class TextAnalysisRequest(
  * 一个诚实的空白比一段编造的内容有价值得多。
  */
 data class PlantAnalysis(
+    /**
+     * 常用名称 / 俗称，多个用「、」分隔。
+     *
+     * 与中文名分列的另一个原因：中文名参与归并匹配，改起来有副作用
+     * （改了就匹配不到旧档案）；俗称纯展示，用户想怎么改都行。
+     */
+    val commonNames: String? = null,
+
     /** 植物简介 */
     val description: String? = null,
 
@@ -51,15 +59,25 @@ data class PlantAnalysis(
 
     /** 养护建议 */
     val careAdvice: String? = null,
+
+    /** 病虫害防治建议 */
+    val pestControl: String? = null,
 ) {
     /** 一个字段都没拿到 —— 视为失败而不是「成功的空结果」 */
     val isEmpty: Boolean
         get() = listOf(
             description, morphologicalFeatures, growthHabits,
-            floweringPeriod, fruitingPeriod, landscapeUses, careAdvice,
+            floweringPeriod, fruitingPeriod, landscapeUses, careAdvice, pestControl,
         ).all { it.isNullOrBlank() }
 
-    /** 拿到了哪些字段，供 UI 决定渲染哪几块 */
+    /**
+     * 拿到了哪些字段，供 UI 决定渲染哪几块。
+     *
+     * **口径：只数「植物百科」区块里会渲染的字段。**
+     * [commonNames] 不在此列 —— 它显示在身份区（中文名下面），
+     * 不属于百科列表；把它算进来会让 [TolerantJsonParser] 的
+     * 「模型只返回了 N/M 个字段」提示对不上用户实际看到的块数。
+     */
     val presentFields: List<Pair<String, String>>
         get() = buildList {
             description?.takeIf { it.isNotBlank() }?.let { add("植物简介" to it) }
@@ -69,6 +87,7 @@ data class PlantAnalysis(
             fruitingPeriod?.takeIf { it.isNotBlank() }?.let { add("果期" to it) }
             landscapeUses?.takeIf { it.isNotBlank() }?.let { add("园林用途" to it) }
             careAdvice?.takeIf { it.isNotBlank() }?.let { add("养护建议" to it) }
+            pestControl?.takeIf { it.isNotBlank() }?.let { add("病虫害防治" to it) }
         }
 }
 

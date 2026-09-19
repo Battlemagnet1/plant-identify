@@ -216,13 +216,15 @@ object PromptBuilder {
         只输出一个 JSON 对象，不要有任何其他文字，也不要使用 ``` 代码块标记。
 
         {
+          "common_names": "常用名称或俗称，多个用「、」分隔",
           "description": "植物简介",
           "morphological_features": "形态特征",
           "growth_habits": "生长习性",
           "flowering_period": "花期",
           "fruiting_period": "果期",
           "landscape_uses": "园林用途",
-          "care_advice": "养护建议"
+          "care_advice": "养护建议",
+          "pest_control": "常见病虫害与防治建议"
         }
     """.trimIndent()
 
@@ -243,6 +245,17 @@ object PromptBuilder {
         4. **不要下鉴定结论**
            不要出现「可以确定是」「一定是」「保证是」这类表述。
            你只是在写百科内容，鉴定结论由用户的实地观察决定。
+
+        5. **common_names 只写真正在用的俗称**
+           写民间口耳相传的叫法（如紫薇的「痒痒树」）。**不要**把
+           中文名的缩写、拉丁名的音译、或你自己起的名字写进去。
+           想不出俗称就填空字符串 —— 编一个不存在的别名会直接误导用户。
+
+        6. **pest_control 要具体到「怎么处理」**
+           写这株植物常见的病虫害名称，以及对应的防治办法
+           （例如「蚜虫：发生时用吡虫啉喷雾，注意叶背」）。
+           只写「注意防治病虫害」等于什么都没写。
+           不要推荐高毒农药，也不要给出具体用药浓度 —— 那需要专业指导。
     """.trimIndent()
 
     private val LOW_CONFIDENCE_ANALYSIS_RULE = """

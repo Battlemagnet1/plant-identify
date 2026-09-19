@@ -11,14 +11,17 @@ import com.plantidentify.data.draft.CaptureDraftStore
 import com.plantidentify.data.draft.DraftImage
 import com.plantidentify.data.image.ImageCompressor
 import com.plantidentify.data.local.entity.ImageRole
+import com.plantidentify.data.location.LocationChoice
 import com.plantidentify.data.location.LocationProvider
 import com.plantidentify.data.location.LocationSettingsStore
+import com.plantidentify.data.location.placeText
 import com.plantidentify.data.storage.ImageStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -92,23 +95,65 @@ class AddPlantViewModel(
     val askLocation: StateFlow<Boolean> = _askLocation.asStateFlow()
 
     /**
-     * 已取到的地点，供页面显示。取不到就是 null，UI 什么都不显示。
+     * 需要向系统申请定位权限。
      *
-     * 直接由草稿派生而不是另存一份状态：地点是草稿的一部分，
-     * 两处各存一份迟早会不一致（比如用户放弃了草稿，标签却还挂着上次的地点）。
-     * 只有草稿里已经有照片时才显示 —— 空草稿下挂个地名没有意义。
+     * ## 为什么要有这个信号
+     *
+     * 位置权限的申请原先**只**挂在首次询问框的「允许」按钮上。
+     * 但用户完全可能直接在「数据管理」页打开开关（那里已经写明了用途），
+     * 这条路径不经过询问框 —— 于是权限永远申请不到，
+     * `captureLocation()` 在 `hasPermission()` 处静默 return，
+     * 界面上既不报错也没有任何地点。用户看到的就是「开了开关、开了 GPS，
+     * 却什么都没有」。
+     *
+     * 现在由页面观察这个信号发起申请：**已开启地点却没权限**时补申请。
+     * 系统在用户永久拒绝后会直接回调 false，不会再弹框，
+     * 因此不会变成每次进页都弹的骚扰。
      */
-    val locationSummary: StateFlow<String?> = draftStore.draft
-        .map { draft ->
-            if (draft.isEmpty) return@map null
-            draft.locationName?.takeIf { it.isNotBlank() }
-                ?: draft.latitude?.let { formatCoordinate(it, draft.longitude) }
-        }
+    private val _requestLocationPermission = MutableStateFlow(false)
+    val requestLocationPermission: StateFlow<Boolean> = _requestLocationPermission.asStateFlow()
+
+    /** 正在取坐标 */
+    private val _fetchingLocation = MutableStateFlow(false)
+
+    /** 上一次取坐标失败（没开定位服务 / 超时 / 有权限但拿不到点） */
+    private val _locationFailed = MutableStateFlow(false)
+
+    private val locationChoice: StateFlow<LocationChoice> = locationSettingsStore.choice
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
-            initialValue = null,
+            initialValue = LocationChoice(),
         )
+
+    /**
+     * 地点这一行该显示什么。
+     *
+     * 直接由「开关 + 权限 + 草稿 + 取用状态」派生，不另存一份文案 ——
+     * 两处各存一份，用户放弃草稿后标签还挂着上次的地名。
+     *
+     * 而且新增了三种“可见”状态：缺权限 / 获取中 / 获取失败。
+     * 之前只有“有地点”与“什么都不显示”两种，
+     * 于是一旦失败，用户无法区分“没开功能”和“功能坏了”。
+     */
+    val locationUi: StateFlow<LocationUiState> = combine(
+        locationChoice,
+        draftStore.draft,
+        _fetchingLocation,
+        _locationFailed,
+    ) { choice, draft, fetching, failed ->
+        when {
+            !choice.enabled -> LocationUiState.Hidden
+            !locationProvider.hasPermission() -> LocationUiState.NeedPermission
+            else -> placeText(draft.locationName, draft.latitude, draft.longitude)
+                ?.let { LocationUiState.Ready(it) }
+                ?: if (failed) LocationUiState.Unavailable else LocationUiState.Fetching
+        }
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
+        initialValue = LocationUiState.Hidden,
+    )
 
     init {
         // 首次进来问一次；已经同意过就直接取，不再打扰
@@ -116,6 +161,9 @@ class AddPlantViewModel(
             val choice = locationSettingsStore.current()
             when {
                 !choice.asked -> _askLocation.value = true
+                // 已开关但系统权限还没给 → 补申请（而不是静默地什么都不做）
+                choice.enabled && !locationProvider.hasPermission() ->
+                    _requestLocationPermission.value = true
                 choice.enabled -> captureLocation()
                 else -> Unit
             }
@@ -146,9 +194,23 @@ class AddPlantViewModel(
      * 位置是可选功能，不能因为它失败而让主流程停下来。
      */
     fun captureLocation() {
-        if (!locationProvider.hasPermission()) return
+        // 没权限时不是静默跃过，而是把申请信号亮起来 ——
+        // 原来那个 return 是整个缺陷最后一环：用户什么提示都看不到
+        if (!locationProvider.hasPermission()) {
+            _requestLocationPermission.value = true
+            return
+        }
+        if (_fetchingLocation.value) return
+
+        _fetchingLocation.value = true
+        _locationFailed.value = false
         externalScope.launch {
-            val coordinate = locationProvider.currentCoordinate() ?: return@launch
+            val coordinate = locationProvider.currentCoordinate()
+            if (coordinate == null) {
+                _fetchingLocation.value = false
+                _locationFailed.value = true
+                return@launch
+            }
             // 地理编码可能失败（国内 ROM 上很常见），失败就不写地名，只留坐标
             val name = locationProvider.reverseGeocode(coordinate)
             draftStore.update { draft ->
@@ -158,13 +220,30 @@ class AddPlantViewModel(
                     locationName = name,
                 )
             }
+            _fetchingLocation.value = false
         }
     }
 
-    /** 无法解析出地名时退化为经纬度显示（规格书：优先地名，但不强制） */
-    private fun formatCoordinate(latitude: Double, longitude: Double?): String {
-        val lng = longitude ?: return "%.4f".format(latitude)
-        return "%.4f, %.4f".format(latitude, lng)
+    /** 权限申请已发起过，把信号消掉 —— 否则重组时会反复申请 */
+    fun consumeLocationPermissionRequest() {
+        _requestLocationPermission.value = false
+    }
+
+    /** 系统权限被拒 —— 让界面转到「去授权 / 重试」的可点状态 */
+    fun onLocationPermissionDenied() {
+        _fetchingLocation.value = false
+        _locationFailed.value = true
+    }
+
+    /**
+     * 用户点了地点行上的动作（补授权 / 重试）。
+     *
+     * 没权限就发起申请，有权限就直接重取 ——
+     * 两种情况在界面上都是“点一下试试”，不该让用户自己判断属于哪一种
+     */
+    fun retryLocation() {
+        _locationFailed.value = false
+        captureLocation()
     }
 
     /** 从相册选择结果导入 */
@@ -358,4 +437,30 @@ data class UploadPlan(
     val estimatedRequestBodyBytes: Long get() = (totalBytes * 4 / 3)
 
     val hasFailure: Boolean get() = failedCount > 0
+}
+
+/**
+ * 地点行的展示状态。
+ *
+ * 把“有没有地点”这一个布尔值拆成五种状态，是为了让用户能区分：
+ * 功能没开 / 差权限 / 正在获取 / 已获取 / 获取失败。
+ * 原来只有“显示地名”与“什么都不显示”，
+ * 于是失败与未开启在界面上完全一模一样。
+ */
+sealed interface LocationUiState {
+
+    /** 用户没开这个功能 —— 整行不显示 */
+    data object Hidden : LocationUiState
+
+    /** 开关开了，但系统定位权限还没给 */
+    data object NeedPermission : LocationUiState
+
+    /** 正在取坐标（定位服务首次冷启动需要几秒） */
+    data object Fetching : LocationUiState
+
+    /** 有权限但拿不到点（没开 GPS / 室内无信号 / 超时） */
+    data object Unavailable : LocationUiState
+
+    /** 已拿到 —— [text] 是地名，地名缺失时是经纬度 */
+    data class Ready(val text: String) : LocationUiState
 }

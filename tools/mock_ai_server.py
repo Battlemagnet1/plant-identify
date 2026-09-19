@@ -135,6 +135,7 @@ PLAIN_TEXT = (
 # 植物百科的响应。它对应**不带图片**的请求 ——
 # 服务端据此区分「这是视觉识别还是文字分析」，一个模式同时服务两条通道。
 ANALYSIS_RESULT = {
+    "common_names": "紫薇花、痒痒树、满堂红",
     "description": "紫薇是千屈菜科紫薇属的落叶灌木或小乔木，夏季开花，花期可长达数月。",
     "morphological_features": "树皮平滑呈灰色，枝干常扭曲；叶互生或对生，椭圆形至倒卵形；"
     "圆锥花序顶生，花瓣皱缩。",
@@ -143,6 +144,7 @@ ANALYSIS_RESULT = {
     "fruiting_period": "9—12 月",
     "landscape_uses": "园林中常用作行道树、庭荫树与花篱，也可盆栽观赏。",
     "care_advice": "生长期保持土壤湿润但不积水；花后适度修剪可促发新枝、延长花期。",
+    "pest_control": "蚜虫：发生时喷亚醋虫消，注意叶背；白粉病：加强通风、避免叶片长期潮湿，发病初期剪除病叶。",
 }
 
 # 一句话带过，模拟「模型没按要求输出 JSON」
@@ -150,6 +152,7 @@ ANALYSIS_PLAIN_TEXT = "抱歉，我无法生成这株植物的完整百科介绍
 
 # JSON 合法但所有字段为空
 ANALYSIS_EMPTY = {
+    "common_names": "",
     "description": "",
     "morphological_features": "",
     "growth_habits": "",
@@ -157,6 +160,7 @@ ANALYSIS_EMPTY = {
     "fruiting_period": "",
     "landscape_uses": "",
     "care_advice": "",
+    "pest_control": "",
 }
 
 
@@ -184,6 +188,7 @@ def build_analysis_content(mode: str) -> str:
         # 键名写成中文，检验解析器的归一化匹配
         return json.dumps(
             {
+                "俗称": ANALYSIS_RESULT["common_names"],
                 "简介": ANALYSIS_RESULT["description"],
                 "形态特征": ANALYSIS_RESULT["morphological_features"],
                 "生长习性": ANALYSIS_RESULT["growth_habits"],
@@ -191,6 +196,7 @@ def build_analysis_content(mode: str) -> str:
                 "果期": ANALYSIS_RESULT["fruiting_period"],
                 "园林用途": ANALYSIS_RESULT["landscape_uses"],
                 "养护建议": ANALYSIS_RESULT["care_advice"],
+                "病虫害防治": ANALYSIS_RESULT["pest_control"],
             },
             ensure_ascii=False,
         )

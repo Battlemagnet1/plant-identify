@@ -97,7 +97,14 @@ fun StatsScreen(
     }
 }
 
-/** 三项主指标：不同植物 / 观察次数 / 照片数 */
+/**
+ * 三项主指标：不同植物 / 观察次数 / 照片数。
+ *
+ * 三列各占 1/3 等宽 —— 用 `weight` 而不是 `SpaceBetween`。
+ * `SpaceBetween` 只在「各列是内容宽度」时把间距撑开，
+ * 一旦某项数字变成两位数（如照片数 100+），列宽就会变，
+ * 三列间距随数据跳动。等宽列则永远对齐。
+ */
 @Composable
 private fun PrimaryMetricsCard(statistics: PlantStatistics) {
     Card(
@@ -108,13 +115,10 @@ private fun PrimaryMetricsCard(statistics: PlantStatistics) {
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
     ) {
         Column(modifier = Modifier.padding(20.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                MetricColumn("不同植物", statistics.distinctPlants)
-                MetricColumn("观察次数", statistics.observationCount)
-                MetricColumn("照片数", statistics.imageCount)
+            Row(modifier = Modifier.fillMaxWidth()) {
+                MetricColumn("不同植物", statistics.distinctPlants, Modifier.weight(1f))
+                MetricColumn("观察次数", statistics.observationCount, Modifier.weight(1f))
+                MetricColumn("照片数", statistics.imageCount, Modifier.weight(1f))
             }
 
             Spacer(Modifier.height(14.dp))
@@ -130,7 +134,20 @@ private fun PrimaryMetricsCard(statistics: PlantStatistics) {
     }
 }
 
-/** 科 / 属的数量 —— 去重后的分类阶元数 */
+/**
+ * 科 / 属的数量 —— 去重后的分类阶元数。
+ *
+ * ## 这里原来有个真实的排版 bug
+ *
+ * 老写法是 `Row(SpaceBetween) { 科; 属; Spacer(weight(1f)) }`，
+ * 注释说「占位，让科/属与上面的三项对齐成等宽列」—— 意图没错，做法相反：
+ * **带 `weight` 的子项会吃掉全部剩余宽度**，于是 `SpaceBetween` 分不到任何空间、
+ * 退化成「依次紧挨着排」。结果就是「科」的数字和「属」的数字贴在一起，
+ * 两个一位数看起来像一个两位数（`1` `1` 读成 `11`）。
+ *
+ * 改法：让科、属各自 `weight(1f)` 成为真正的等宽列，第三格留空 Spacer。
+ * 这样与上面的三项主指标列宽完全一致，数字之间也有了固定间距。
+ */
 @Composable
 private fun TaxonomyCard(statistics: PlantStatistics) {
     Card(
@@ -141,14 +158,11 @@ private fun TaxonomyCard(statistics: PlantStatistics) {
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
     ) {
         Column(modifier = Modifier.padding(20.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                MetricColumn("科", statistics.familyCount)
-                MetricColumn("属", statistics.genusCount)
-                // 占位，让「科 / 属」两项与上面的三项对齐成等宽列
-                Spacer(Modifier.weight(1f).fillMaxWidth())
+            Row(modifier = Modifier.fillMaxWidth()) {
+                MetricColumn("科", statistics.familyCount, Modifier.weight(1f))
+                MetricColumn("属", statistics.genusCount, Modifier.weight(1f))
+                // 第三格留空，只为让科/属与上面的三项主指标列宽一致
+                Spacer(Modifier.weight(1f))
             }
 
             Spacer(Modifier.height(10.dp))
@@ -163,8 +177,8 @@ private fun TaxonomyCard(statistics: PlantStatistics) {
 }
 
 @Composable
-private fun MetricColumn(label: String, value: Int) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+private fun MetricColumn(label: String, value: Int, modifier: Modifier = Modifier) {
+    Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
         Text(
             text = value.toString(),
             style = MaterialTheme.typography.headlineMedium,
