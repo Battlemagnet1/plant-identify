@@ -1101,7 +1101,11 @@ else:
 
 print("\n[2] 统计页：科 / 属 各自占 1/3 等宽列（问题 7）")
 
-if open_stats():
+# 首页 → 统计页这条路径偶发走不通（uiautomator 取树本身就会偶发失败，
+# dump() 内部已重试 4 次，但整段导航仍可能整体落空）。
+# 一次不成就再走一遍 —— 不要因为一次抖动就把「进入统计页」判成失败。
+entered_stats = open_stats() or open_stats()
+if entered_stats:
     check("进入统计页", True)
 
     root = dump()
@@ -1161,8 +1165,16 @@ if open_data_management():
     check("进入数据管理页", True)
 
     scroll_top(8)
-    text = collect_all_text()
-    check("页面有「记录观察地点」开关", "记录观察地点" in text)
+    # 用 find() 而不是 collect_all_text()：后者要逐屏 dump 十几次，
+    # 任何一次取树抖动都会让整段文本缺一块，于是「页面上明明有这个开关」
+    # 也会被判成不存在。find() 底层的 dump 自带 4 次重试，稳得多。
+    label_found = False
+    for _ in range(4):
+        if find("记录观察地点") is not None:
+            label_found = True
+            break
+        time.sleep(1.2)
+    check("页面有「记录观察地点」开关", label_found)
 
     # collect_all_text() 扫完会把页面停在**底部** ——
     # 不回顶部就 dump，顶部那个开关根本不在树里，
