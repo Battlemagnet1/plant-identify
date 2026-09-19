@@ -1259,14 +1259,19 @@ if goto_home():
                     if desc.startswith("\u690d\u7269\u7167\u7247"):
                         target = n
                         break
-            if target:
+            # ⚠️ 必须写 `is not None`。
+            # `if target:` 对 ElementTree 的元素取的是**子节点个数** ——
+            # <node> 是叶子节点、没有子节点，于是恒为 False。
+            # 后果不是报错，而是整个「查看器」验证段被**静默跳过**：
+            # 连截图都不执行，汇总里也看不出少了什么。
+            if target is not None:
                 break
             scroll_down(1)
             time.sleep(1)
 
         check("找到照片缩略图", target is not None)
 
-        if target:
+        if target is not None:
             c = center(target)
             shell("input", "tap", str(c[0]), str(c[1]))
             time.sleep(3)
@@ -1295,6 +1300,11 @@ if goto_home():
 
             tap("\u5173\u95ed", exact=True, timeout=10)
             time.sleep(1.5)
+        else:
+            # 绝不能没有这个 else：没有它的话，上面四条断言会在「没找到缩略图」时
+            # 一条都不打印 —— 汇总里数字照样好看，实际什么都没验。
+            check("查看器可打开并保存到相册", False,
+                  "没找到缩略图，整段查看器验证被跳过")
 else:
     check("回到首页", False, "流程未走通")
 
