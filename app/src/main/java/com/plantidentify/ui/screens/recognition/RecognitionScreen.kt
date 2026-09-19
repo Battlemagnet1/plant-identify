@@ -292,7 +292,11 @@ private fun FailureCard(state: RecognitionUiState.Failed) {
                 HorizontalDivider()
                 Spacer(Modifier.height(10.dp))
                 Text(
-                    text = "服务返回：$detail",
+                    // 只有确实来自服务端的细节才加这个前缀。
+                    // 本地问题（照片读不出来等）走 LocalProblem，
+                    // isFromServer 为 false，不会出现「服务返回：照片读取失败」
+                    // 这种把人指向错误方向的提示
+                    text = if (state.failure.isFromServer) "服务返回：$detail" else detail,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onErrorContainer,
                 )

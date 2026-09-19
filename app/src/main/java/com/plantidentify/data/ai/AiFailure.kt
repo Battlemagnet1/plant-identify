@@ -35,6 +35,17 @@ sealed class AiFailure(
     val causeForLog: Throwable? = null,
 ) {
 
+    /**
+     * 这个失败的详情是否**真的来自服务端**。
+     *
+     * 界面在给详情加「服务返回：」前缀之前必须先问这一句。以前不加区分，
+     * 于是本地问题（照片读不出来、还没添加照片）也被写成
+     * 「服务返回：照片读取失败」—— 用户会去查 Base URL、换模型、翻网络，
+     * 而这个错误跟服务端一点关系都没有。**把用户指向错误的排查方向，
+     * 比不提示更糟。**
+     */
+    open val isFromServer: Boolean = true
+
     /** 未配置好 AI 服务 */
     class NotConfigured(missing: List<String>) : AiFailure(
         userMessage = "还没有配置 AI 服务，缺少：${missing.joinToString("、")}",
@@ -189,6 +200,30 @@ sealed class AiFailure(
         causeForLog = cause,
     )
 
+    /**
+     * 与 AI 服务无关的本地问题：草稿里还没有照片、照片文件读不出来等等。
+     *
+     * 单列一类而不复用 [Unknown]，是因为两者的**处理方式**根本不同：
+     * [Unknown] 带着服务端细节，界面会加「服务返回：」前缀；
+     * 而这里的问题出在本机，用户该做的是回去重新添加照片，
+     * 提示里不该出现任何指向服务端的字样。
+     *
+     * 故意不给 [serverDetail] 赋值 —— 没有服务端参与，就没有服务端细节可讲。
+     */
+    class LocalProblem(
+        message: String,
+        hint: String? = null,
+        cause: Throwable? = null,
+    ) : AiFailure(
+        userMessage = message,
+        fixHint = hint,
+        // 重试同样的参数只会得到同样的结果，用户得先动手改点什么
+        canRetry = false,
+        causeForLog = cause,
+    ) {
+        override val isFromServer: Boolean get() = false
+    }
+
     companion object {
         /**
          * 从服务端错误响应中提取可读细节。
@@ -244,23 +279,31 @@ sealed class AiFailure(
          */
         fun sanitize(text: String?, apiKey: String? = null): String? {
             if (text.isNullOrBlank()) return null
-
-            var result = text
-            if (!apiKey.isNullOrBlank() && apiKey.length >= 8) {
-                result = result.replace(apiKey, "***")
-            }
-            // 兜底：即使拿不到具体 Key，也拦掉常见的 Key 字面量形态
-            result = result
-                .replace(Regex("""sk-[A-Za-z0-9_\-]{12,}"""), "***")
-                .replace(Regex("""ark-[A-Za-z0-9_\-]{12,}"""), "***")
-                .replace(Regex("""Bearer\s+[A-Za-z0-9_\-.]{12,}"""), "Bearer ***")
-
-            result = result.trim()
+            val result = redact(text, apiKey).trim()
             return if (result.length <= MAX_DETAIL_LENGTH) {
                 result
             } else {
                 result.take(MAX_DETAIL_LENGTH) + "…"
             }
+        }
+
+        /**
+         * 只做脱敏，**不截断**。
+         *
+         * 拆出来是给崩溃日志用的：那里要落一份完整堆栈，截到 300 字等于白记。
+         * 但「API Key 不出现在任何日志中」这条红线对崩溃日志同样成立 ——
+         * 所以两处共用同一套匹配规则，而不是各写一份正则（各写一份迟早会漏）。
+         */
+        fun redact(text: String, apiKey: String? = null): String {
+            var result = text
+            if (!apiKey.isNullOrBlank() && apiKey.length >= 8) {
+                result = result.replace(apiKey, "***")
+            }
+            // 兜底：即使拿不到具体 Key，也拦掉常见的 Key 字面量形态
+            return result
+                .replace(Regex("""sk-[A-Za-z0-9_\-]{12,}"""), "***")
+                .replace(Regex("""ark-[A-Za-z0-9_\-]{12,}"""), "***")
+                .replace(Regex("""Bearer\s+[A-Za-z0-9_\-.]{12,}"""), "Bearer ***")
         }
 
         /** 错误信息面向用户展示的最长长度 */

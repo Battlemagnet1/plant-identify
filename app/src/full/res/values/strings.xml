@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  full 版本的显示名覆盖。
+
+  这是一个**覆盖源集**：只有 app_name 一个字符串，其余资源仍从 main 里取。
+  flavor 源集的优先级高于 main，所以同名的 app_name 以这里为准。
+
+  为什么不用 resValue：那会在生成的 res 目录里再造一份 app_name，
+  与 main 里那份同名资源的胜负取决于合并顺序，而覆盖源集是明确的、
+  由 Android 资源合并规则保证的行为。
+-->
+<resources>
+    <string name="app_name">Plant Identify Library（完整版）</string>
+</resources>

@@ -47,16 +47,18 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.plantidentify.AppEdition
 import com.plantidentify.data.draft.CaptureDraft
 import com.plantidentify.data.draft.DraftImage
+import com.plantidentify.data.export.formatBytes
 import com.plantidentify.data.local.entity.ImageRole
 import com.plantidentify.data.storage.ImageStore
 import com.plantidentify.ui.camera.hasCameraPermission
 import com.plantidentify.ui.components.BackIconButton
 import com.plantidentify.ui.components.ImageRoleSelector
 import com.plantidentify.ui.components.LocalImage
+import com.plantidentify.ui.util.openAppSettings
 import java.io.File
-import java.util.Locale
 
 /**
  * 添加植物页（规格书第三、四节）。
@@ -145,7 +147,9 @@ fun AddPlantScreen(
     // 用户在「数据管理」里打开开关后不会再经过询问框，
     // 权限只能靠这里补上（否则就是「开了开关却永远没地点」）
     LaunchedEffect(requestLocationPermission) {
-        if (requestLocationPermission) {
+        // 基础版没有地点功能的任何入口，也就不该去申请定位权限 ——
+        // 一个用不到位置的版本突然弹权限框，用户只会觉得莫名其妙
+        if (AppEdition.isFull && requestLocationPermission) {
             onLocationPermissionRequested()
             locationPermissionLauncher.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
         }
@@ -201,7 +205,7 @@ fun AddPlantScreen(
             // 于是失败与未开启在界面上完全一样 ——
             // 用户看到的就是「开了功能，但什么都没发生」。
             // 现在每种状态都有明确的一行字，失败时还可以点一下重试。
-            if (locationUi != LocationUiState.Hidden) {
+            if (AppEdition.isFull && locationUi != LocationUiState.Hidden) {
                 item {
                     LocationRow(
                         state = locationUi,
@@ -295,7 +299,8 @@ fun AddPlantScreen(
 
     // 首次使用位置功能时的询问（规格书第十八节的文案）。
     // 只问一次：之后再进来直接按上次的选择走，用户想改去设置页。
-    if (askLocation) {
+    // 首次询问同样只在完整版出现
+    if (AppEdition.isFull && askLocation) {
         AlertDialog(
             onDismissRequest = { /* 必须显式选择，不允许点外部关掉 */ },
             title = { Text("记录观察地点？") },
@@ -331,6 +336,7 @@ fun AddPlantScreen(
  */
 @Composable
 private fun LocationRow(state: LocationUiState, onAction: () -> Unit) {
+    val context = LocalContext.current
     val (text, actionable) = when (state) {
         LocationUiState.Hidden -> return
         LocationUiState.NeedPermission -> "📍 未获得定位权限 · 点此授权" to true
@@ -350,6 +356,11 @@ private fun LocationRow(state: LocationUiState, onAction: () -> Unit) {
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        // 「点此授权」在永久拒绝后是点了没反应的（系统不再弹框）。
+        // 补一个明确的去处，用户才知道还能怎么办
+        if (state == LocationUiState.NeedPermission) {
+            TextButton(onClick = { openAppSettings(context) }) { Text("去系统设置") }
+        }
     }
 }
 
@@ -467,6 +478,7 @@ private fun AddPhotoRow(onCamera: () -> Unit, onGallery: () -> Unit) {
 
 @Composable
 private fun CameraDeniedCard(onGallery: () -> Unit) {
+    val context = LocalContext.current
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
@@ -489,7 +501,12 @@ private fun CameraDeniedCard(onGallery: () -> Unit) {
                 color = MaterialTheme.colorScheme.onErrorContainer,
             )
             Spacer(Modifier.height(4.dp))
-            TextButton(onClick = onGallery) { Text("改用相册") }
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(onClick = onGallery) { Text("改用相册") }
+                // 永久拒绝后系统不再弹框，「改用相册」是绕路而不是解决 ——
+                // 想拍照的用户需要一条直达系统设置的路径
+                TextButton(onClick = { openAppSettings(context) }) { Text("去系统设置") }
+            }
         }
     }
 }
@@ -560,20 +577,6 @@ private fun UploadPlanCard(plan: UploadPlan) {
             }
         }
     }
-}
-
-/**
- * 把字节数格式化成易读文本。
- *
- * 显式指定 [Locale.US] 而不是依赖默认 locale：在某些区域（如德语、法语）
- * 默认格式化会用逗号做小数点，「1,5 MB」这类输出在这个场景里只会让人困惑，
- * 而且同一份数据在不同手机上显示不一致也无从排查。
- */
-internal fun formatBytes(bytes: Long): String = when {
-    bytes <= 0L -> "0 KB"
-    bytes < 1024L -> "$bytes B"
-    bytes < 1024L * 1024L -> "${bytes / 1024} KB"
-    else -> String.format(Locale.US, "%.1f MB", bytes / 1024.0 / 1024.0)
 }
 
 /** 拍摄建议（规格书第四节）：给建议但不强制 */

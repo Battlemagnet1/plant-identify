@@ -85,7 +85,7 @@ class RecognitionViewModel(
             val draft = draftStore.current()
             if (draft.isEmpty) {
                 _state.value = RecognitionUiState.Failed(
-                    AiFailure.Unknown("还没有照片，请先添加至少一张植物照片"),
+                    AiFailure.LocalProblem("还没有照片，请先添加至少一张植物照片"),
                     canOpenSettings = false,
                 )
                 return@launch
@@ -112,7 +112,9 @@ class RecognitionViewModel(
 
             if (images.isEmpty()) {
                 _state.value = RecognitionUiState.Failed(
-                    AiFailure.Unknown("照片读取失败，请回到上一步重新添加照片"),
+                    // 本机文件的问题，不是服务端的问题 —— 用 LocalProblem
+                    // 才不会在界面上被冠以「服务返回：」
+                    AiFailure.LocalProblem("照片读取失败，请回到上一步重新添加照片"),
                     canOpenSettings = false,
                 )
                 return@launch

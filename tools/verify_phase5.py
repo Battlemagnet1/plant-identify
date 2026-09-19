@@ -38,7 +38,32 @@ ADB = os.environ.get(
 )
 D = os.environ.get("ANDROID_SERIAL", "192.168.253.119:5555")
 MOCK = os.environ.get("MOCK_BASE", "http://127.0.0.1:8899")
-PKG = "com.plantidentify"
+# 允许用环境变量覆盖包名 —— 同一套脚本要能验收 base 与 full 两个版本。
+# 默认仍是基础版的 applicationId。
+PKG = os.environ.get("PKG", "com.plantidentify")
+
+def start_app():
+    """启动应用（组件名动态解析，兼容基础版与完整版）。
+
+    `am start -n <PKG>/.MainActivity` 这种简写只在「包名与 namespace 相同」
+    时才成立。完整版把 applicationId 改成了 com.plantidentify.full，
+    而 namespace 仍是 com.plantidentify —— 简写会被展开成
+    com.plantidentify.full.com.plantidentify.full.MainActivity，
+    那是**不存在的类**，启动会静默失败，后续所有界面断言都会读到一个
+    根本不是目标应用的界面。
+
+    所以这里先问系统要真正的启动组件，问不到再退回简写。
+    """
+    out = shell("cmd", "package", "resolve-activity", "--brief", PKG)
+    for line in reversed(out.replace("\r", "").split("\n")):
+        line = line.strip()
+        if line.startswith(PKG + "/"):
+            shell("am", "start", "-n", line)
+            return True
+    start_app()
+    return False
+
+
 OUT_DIR = os.environ.get(
     "SHOT_DIR",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, ".workbuddy"),
@@ -283,7 +308,7 @@ def config_state():
 def goto_add_plant():
     shell("am", "force-stop", PKG)
     time.sleep(1.5)
-    shell("am", "start", "-n", f"{PKG}/.MainActivity")
+    start_app()
     time.sleep(5)
     if not tap("添加植物", exact=True, timeout=20):
         return False
@@ -317,7 +342,7 @@ def ensure_photos(count=3):
 def open_settings():
     shell("am", "force-stop", PKG)
     time.sleep(1.5)
-    shell("am", "start", "-n", f"{PKG}/.MainActivity")
+    start_app()
     time.sleep(5)
     if not tap("设置", exact=True, timeout=20):
         return False
@@ -461,7 +486,7 @@ def open_home_and_search():
     """回首页并进入搜索页"""
     shell("am", "force-stop", PKG)
     time.sleep(1.5)
-    shell("am", "start", "-n", f"{PKG}/.MainActivity")
+    start_app()
     time.sleep(5)
     # 首页的搜索入口是一个整行的可点击卡片，用其中的提示文案定位
     if not tap("搜索植物", exact=False, timeout=20):
@@ -531,7 +556,7 @@ def open_plant_detail(plantId):
     """
     shell("am", "force-stop", PKG)
     time.sleep(1.5)
-    shell("am", "start", "-n", f"{PKG}/.MainActivity")
+    start_app()
     time.sleep(5)
     if not tap("紫薇", exact=True, timeout=20):
         return False

@@ -37,7 +37,9 @@ class OpenAICompatibleVisionProvider(
             return VisionCallResult.Failure(AiFailure.NotConfigured(config.missingFields))
         }
         if (request.images.isEmpty()) {
-            return VisionCallResult.Failure(AiFailure.Unknown("没有可识别的照片"))
+            return VisionCallResult.Failure(
+                AiFailure.LocalProblem("没有可识别的照片，请先添加照片"),
+            )
         }
 
         // 第一轮带上 response_format 与 temperature 争取更稳定的输出；
@@ -199,13 +201,14 @@ class OpenAICompatibleVisionProvider(
         for (image in request.images) {
             if (!image.file.isFile) {
                 return@withContext ChatOutcome.TransportError(
-                    AiFailure.Unknown("有一张待上传的图片已不存在，请重新添加照片"),
+                    AiFailure.LocalProblem("有一张待上传的图片已不存在，请重新添加照片"),
                 )
             }
             val bytes = runCatching { image.file.readBytes() }.getOrElse { error ->
                 return@withContext ChatOutcome.TransportError(
-                    AiFailure.Unknown(
-                        detail = AiFailure.sanitize("读取图片失败：${error.javaClass.simpleName}"),
+                    AiFailure.LocalProblem(
+                        message = "有一张照片读不出来，请回到上一步重新添加照片",
+                        hint = "可能是照片文件已被删除，或存储空间不足导致写入不完整",
                         cause = error,
                     ),
                 )

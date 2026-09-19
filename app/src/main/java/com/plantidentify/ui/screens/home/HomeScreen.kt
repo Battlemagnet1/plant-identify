@@ -2,14 +2,15 @@ package com.plantidentify.ui.screens.home
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -30,6 +31,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.plantidentify.AppEdition
 import com.plantidentify.BuildConfig
 import com.plantidentify.R
 import com.plantidentify.data.storage.ImageStore
@@ -98,28 +100,45 @@ fun HomeScreen(
             }
         },
     ) { innerPadding ->
-        Column(
+        // 用 LazyColumn 而不是 Column + verticalScroll：
+        // 后者会把**全部卡片同时组合**，100 株档案就是 100 张卡片一起进组合、
+        // 100 张缩略图同时开始解码 —— 滚动掉帧与内存峰值都出在这里。
+        // LazyColumn 只组合可见项，配合 LocalImage 的内存缓存，
+        // 来回滚动也不会重复解码。
+        LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding)
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp),
+                .padding(innerPadding),
+            // 子项自带的 16dp 间距之外，左右留 20dp、底部留出悬浮按钮的位置
+            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 88.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            Spacer(Modifier.height(4.dp))
+            item(key = "search", contentType = "entry") {
+                SearchEntry(onClick = onSearch)
+            }
 
-            SearchEntry(onClick = onSearch)
+            // 统计入口只在完整版出现 —— 基础版没有统计页
+            if (AppEdition.isFull) {
+                item(key = "stats", contentType = "entry") {
+                    StatisticsCard(statistics, onClick = onOpenStats)
+                }
+            }
 
-            StatisticsCard(statistics, onClick = onOpenStats)
-
-            SectionTitle(
-                if (cards.isEmpty()) "植物档案" else "植物档案（${cards.size}）",
-            )
+            item(key = "archive-title", contentType = "header") {
+                SectionTitle(
+                    if (cards.isEmpty()) "植物档案" else "植物档案（${cards.size}）",
+                )
+            }
 
             if (cards.isEmpty()) {
-                EmptyArchiveCard()
+                item(key = "empty", contentType = "empty") { EmptyArchiveCard() }
             } else {
-                cards.forEach { card ->
+                items(
+                    items = cards,
+                    key = { it.plantId },
+                    // 卡片是同一种布局，声明成同一类让 LazyColumn 能复用已组合的项
+                    contentType = { "plant-card" },
+                ) { card ->
                     PlantCard(
                         card = card,
                         imageStore = imageStore,
@@ -132,14 +151,14 @@ fun HomeScreen(
             // 这几个页面在 Phase 5 已有真实入口，这张卡只是为了在数据为空时
             // 仍能进去看看页面结构，因此排在最后且不做强调。
             if (BuildConfig.DEBUG && cards.isEmpty()) {
-                SkeletonSelfCheckCard(
-                    onOpenPlantDetail = { onOpenPlantDetail(1L) },
-                    onOpenObservation = { onOpenObservation(1L) },
-                    onOpenRecognition = onOpenRecognition,
-                )
+                item(key = "skeleton", contentType = "entry") {
+                    SkeletonSelfCheckCard(
+                        onOpenPlantDetail = { onOpenPlantDetail(1L) },
+                        onOpenObservation = { onOpenObservation(1L) },
+                        onOpenRecognition = onOpenRecognition,
+                    )
+                }
             }
-
-            Spacer(Modifier.height(80.dp))
         }
     }
 }

@@ -43,6 +43,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.plantidentify.AppEdition
 import com.plantidentify.data.local.relation.ObservationWithImages
 import com.plantidentify.data.location.placeText
 import com.plantidentify.data.storage.ImageStore
@@ -238,7 +239,12 @@ private fun ObservationCard(
     onOpenImage: (Int) -> Unit,
 ) {
     val observation = item.observation
-    val recognized = parseRecognition(observation.aiResultJson)
+    // remember：解析结果只取决于这段 JSON 本身，不该每次重组都重来一遍。
+    // 观察卡片因分析状态、备注编辑等变化重组得很频繁，而解析要建整棵
+    // JSON 对象树，在长列表里滚动时这笔开销并不小
+    val recognized = remember(observation.aiResultJson) {
+        parseRecognition(observation.aiResultJson)
+    }
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -292,7 +298,14 @@ private fun ObservationCard(
                                 modifier = Modifier
                                     .size(84.dp)
                                     .clip(RoundedCornerShape(10.dp))
-                                    .clickable { onOpenImage(index) },
+                                    // 大图查看为完整版功能，基础版照片只作展示
+                                    .then(
+                                        if (AppEdition.isFull) {
+                                            Modifier.clickable { onOpenImage(index) }
+                                        } else {
+                                            Modifier
+                                        },
+                                    ),
                             )
                         }
                         Spacer(Modifier.height(3.dp))

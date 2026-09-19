@@ -36,6 +36,8 @@ datastore = "1.2.1"
 okhttp = "5.5.0"
 coroutines = "1.10.2"
 junit = "4.13.2"
+# org.json 官方实现（Maven Central）。JVM 单测必需 —— 见下方 libraries 里的说明
+orgJson = "20240303"
 
 [libraries]
 # --- AndroidX 基础 ---
@@ -92,6 +94,12 @@ okhttp = { group = "com.squareup.okhttp3", name = "okhttp" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "coroutines" }
 androidx-room-testing = { group = "androidx.room", name = "room-testing", version.ref = "room" }
+
+# JVM 单测里的 org.json。
+# Android 运行时自带 org.json，但单元测试跑在桌面 JVM 上：android.jar 里那些类
+# 只有方法签名、没有实现，一调用就抛 "not mocked"。容错 JSON 解析是本项目
+# 最值得单测的逻辑，直接补一份官方实现，测试才能真跑起来。
+org-json = { group = "org.json", name = "json", version.ref = "orgJson" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

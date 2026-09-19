@@ -23,7 +23,9 @@ import sqlite3
 import subprocess
 import sys
 
-PKG = "com.plantidentify"
+# 允许用环境变量覆盖包名 —— 同一套脚本要能验收 base 与 full 两个版本。
+# 默认仍是基础版的 applicationId。
+PKG = os.environ.get("PKG", "com.plantidentify")
 ADB = os.environ.get(
     "ADB",
     os.path.join(os.environ.get("ANDROID_HOME", "C:/Users/a/Android/Sdk"),

@@ -1,5 +1,7 @@
 package com.plantidentify.data.export
 
+import java.util.Locale
+
 /**
  * HTML 导出的三种模式（分析报告 Part 1.3 缺口 3 的三级策略）。
  *
@@ -88,9 +90,21 @@ data class ExportResult(
         }
 }
 
+/**
+ * 把字节数格式化成易读文本。
+ *
+ * 显式指定 [Locale.US] 而不依赖默认区域：德语、法语等区域会用逗号做小数点，
+ * 「1,5 MB」在这个场景里只会让人困惑；而且同一份数据在不同手机上显示不一致时
+ * 根本无从排查。
+ *
+ * 全项目只此一份。拍摄页曾经另有一份略有差异的实现（`0 字节` 一个显示
+ * 「0 KB」、一个显示「0 B」），同一批数据在两个页面上是两种样子 ——
+ * 显示口径必须只有一个来源。
+ */
 fun formatBytes(bytes: Long): String = when {
-    bytes >= 1024L * 1024 * 1024 -> "%.1f GB".format(bytes / 1024.0 / 1024 / 1024)
-    bytes >= 1024L * 1024 -> "%.1f MB".format(bytes / 1024.0 / 1024)
-    bytes >= 1024L -> "%.0f KB".format(bytes / 1024.0)
+    bytes >= 1024L * 1024 * 1024 ->
+        String.format(Locale.US, "%.1f GB", bytes / 1024.0 / 1024 / 1024)
+    bytes >= 1024L * 1024 -> String.format(Locale.US, "%.1f MB", bytes / 1024.0 / 1024)
+    bytes >= 1024L -> String.format(Locale.US, "%.0f KB", bytes / 1024.0)
     else -> "$bytes B"
 }

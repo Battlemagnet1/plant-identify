@@ -115,6 +115,17 @@ class ImageCompressor(context: Context) {
          * 先用 `inJustDecodeBounds` 读出原始尺寸以计算降采样倍率，
          * 避免把上亿像素的原图整张读进内存导致 OOM。
          *
+         * ## 中间位图会被回收
+         *
+         * 这条链路最多会同时存在三张位图：降采样后的原图、旋转结果、缩放结果。
+         * 一张 5000×4000 的照片走 2048 档时，峰值可达 70 MB 以上 ——
+         * 大图查看器连着翻几张就 OOM。这里的规则是：
+         * **一个中间位图一旦不再是返回值，立刻 recycle。**
+         *
+         * 判据用「引用是不是同一个对象」而不是「尺寸变没变」：
+         * `Bitmap.createBitmap` / `createScaledBitmap` 在无需变换时
+         * 会**直接返回入参**，那种情况下回收就等于把还要用的位图废掉。
+         *
          * @param maxEdge 输出图的最长边；传 0 表示不缩放（仅纠正方向）
          */
         fun decodeOriented(file: File, maxEdge: Int): Bitmap? {
@@ -137,6 +148,7 @@ class ImageCompressor(context: Context) {
             ) ?: return null
 
             val oriented = applyExifOrientation(decoded, file)
+            if (oriented !== decoded) decoded.recycle()
 
             if (maxEdge <= 0) return oriented
             val longest = maxOf(oriented.width, oriented.height)
@@ -149,6 +161,7 @@ class ImageCompressor(context: Context) {
                 (oriented.height * scale).toInt().coerceAtLeast(1),
                 true,
             )
+            if (scaled !== oriented) oriented.recycle()
             return scaled
         }
 

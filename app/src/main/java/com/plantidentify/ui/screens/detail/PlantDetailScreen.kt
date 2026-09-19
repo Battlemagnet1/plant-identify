@@ -47,6 +47,7 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.plantidentify.AppEdition
 import com.plantidentify.data.ai.RecognitionResult
 import com.plantidentify.data.local.entity.AnalysisStatus
 import com.plantidentify.data.local.entity.ObservationImageEntity
@@ -282,14 +283,17 @@ private fun IdentityCard(plant: PlantRecordEntity) {
             }
 
             // 俗称放在学名下面、科属上面：它是「这株植物还可能叫什么」，
-            // 与人辨认植物的顺序一致（先想它叫什么，再看它属于哪一科）
-            plant.commonNames?.takeIf { it.isNotBlank() }?.let { alias ->
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    text = "俗称：$alias",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f),
-                )
+            // 与人辨认植物的顺序一致（先想它叫什么，再看它属于哪一科）。
+            // 该字段是完整版功能，基础版不呈现
+            if (AppEdition.isFull) {
+                plant.commonNames?.takeIf { it.isNotBlank() }?.let { alias ->
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = "俗称：$alias",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f),
+                    )
+                }
             }
 
             val taxonomy = listOfNotNull(
@@ -408,7 +412,12 @@ private fun PhotoStrip(
                     modifier = Modifier
                         .size(120.dp)
                         .clip(RoundedCornerShape(12.dp))
-                        .clickable { onOpen(index) },
+                        // 大图查看只在完整版提供。基础版照片照常显示，
+                        // 只是点不开 —— 与其给一个点了没反应的区域，不如不给
+                        .then(
+                            if (AppEdition.isFull) Modifier.clickable { onOpen(index) }
+                            else Modifier,
+                        ),
                 )
             }
         }
@@ -686,5 +695,9 @@ private fun analysisSections(plant: PlantRecordEntity): List<Pair<String, String
     plant.fruitingPeriod?.takeIf { it.isNotBlank() }?.let { add("果期" to it) }
     plant.landscapeUses?.takeIf { it.isNotBlank() }?.let { add("园林用途" to it) }
     plant.careAdvice?.takeIf { it.isNotBlank() }?.let { add("养护建议" to it) }
-    plant.pestControl?.takeIf { it.isNotBlank() }?.let { add("病虫害防治" to it) }
+    // 病虫害防治是完整版字段。基础版的库结构、AI 请求与完整版完全相同
+    // （所以两边的备份包可以互相迁移），只是界面不呈现这一项
+    if (AppEdition.isFull) {
+        plant.pestControl?.takeIf { it.isNotBlank() }?.let { add("病虫害防治" to it) }
+    }
 }

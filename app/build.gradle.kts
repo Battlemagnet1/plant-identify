@@ -47,6 +47,37 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    // ---------- 两个版本 ----------
+    //
+    // base = 基础版（Phase 1–5 的功能集），applicationId 沿用 com.plantidentify，
+    //        已装过 v1.0.0 的用户可以直接覆盖升级。
+    // full = 完整版（含统计/位置/HTML 导出/备份恢复/别名与病虫害/大图查看/照片增删），
+    //        独立 applicationId，与基础版**可同时安装**、互不覆盖。
+    //
+    // 两者共用同一份底层代码与同一个数据库结构（version 2）与同一套 AI 请求，
+    // 差异只在界面入口 —— 靠 FULL_EDITION 这个编译期常量控制。
+    // 于是两个包的档案数据可以通过备份包互相迁移。
+    //
+    // 版本号两边完全相同、都保持 1.0.0：区分靠包名而不是版本号，
+    // 因为两个包的「版本」指的是同一份代码的两个功能集，不是两次迭代。
+    flavorDimensions += "edition"
+    productFlavors {
+        create("base") {
+            dimension = "edition"
+            applicationId = "com.plantidentify"
+            // 显示名沿用 main 里的 app_name，不做覆盖
+            buildConfigField("boolean", "FULL_EDITION", "false")
+        }
+        create("full") {
+            dimension = "edition"
+            applicationId = "com.plantidentify.full"
+            // 显示名由 src/full/res/values/strings.xml 覆盖（比 resValue 稳：
+            // resValue 会在生成的 res 里再造一份 app_name，与 main 的那份
+            // 同名资源在合并期谁赢取决于源集优先级，不如直接声明一个覆盖源集清楚）
+            buildConfigField("boolean", "FULL_EDITION", "true")
+        }
+    }
+
     signingConfigs {
         if (hasReleaseKeystore) {
             create("release") {
@@ -86,6 +117,16 @@ android {
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        }
+    }
+
+    testOptions {
+        unitTests {
+            // 单测跑在桌面 JVM 上，android.jar 里的方法默认是「抛异常」而非返回默认值。
+            // 把开关打开，被测代码里那些无关紧要的 android.* 调用（Log、Base64 等）
+            // 才不至于让一条纯逻辑断言失败 —— 失败原因会变成「not mocked」，
+            // 而不是真的断言不成立，那种误导比测试没写更糟。
+            isReturnDefaultValues = true
         }
     }
 }
@@ -137,4 +178,6 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.androidx.room.testing)
+    // 容错 JSON 解析要用 JSONObject/JSONArray，JVM 上没有实现，必须自带
+    testImplementation(libs.org.json)
 }

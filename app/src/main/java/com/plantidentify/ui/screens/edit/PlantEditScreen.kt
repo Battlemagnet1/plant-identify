@@ -45,6 +45,7 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.plantidentify.AppEdition
 import com.plantidentify.data.storage.ImageStore
 import com.plantidentify.ui.components.BackIconButton
 import com.plantidentify.ui.components.LocalImage
@@ -148,13 +149,15 @@ fun PlantEditScreen(
                 singleLine = true,
             )
 
-            EditField(
-                value = form.commonNames,
-                onValueChange = { value -> viewModel.update { copy(commonNames = value) } },
-                label = "常用名称 / 俗称",
-                placeholder = "多个用「、」分隔，如 紫薇花、痒痒树",
-                singleLine = true,
-            )
+            if (AppEdition.isFull) {
+                EditField(
+                    value = form.commonNames,
+                    onValueChange = { value -> viewModel.update { copy(commonNames = value) } },
+                    label = "常用名称 / 俗称",
+                    placeholder = "多个用「、」分隔，如 紫薇花、痒痒树",
+                    singleLine = true,
+                )
+            }
 
             EditField(
                 value = form.latinName,
@@ -258,38 +261,44 @@ fun PlantEditScreen(
                 minLines = 2,
             )
 
-            EditField(
-                value = form.pestControl,
-                onValueChange = { value -> viewModel.update { copy(pestControl = value) } },
-                label = "病虫害防治",
-                placeholder = "如 蚜虫：发生时用吡虫啉喷雾，注意叶背",
-                minLines = 2,
-            )
-
-            SectionHeader("照片")
-
-            Text(
-                text = "照片的增删立刻生效，不需要点下面的「保存修改」；" +
-                    "名称与百科内容要点了保存才生效。",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-
-            photos.forEach { observation ->
-                ObservationPhotosCard(
-                    observation = observation,
-                    imageStore = imageStore,
-                    busy = photoBusy,
-                    onAdd = {
-                        addTargetObservationId = observation.observationId
-                        pickPhotosLauncher.launch(
-                            PickVisualMediaRequest(
-                                ActivityResultContracts.PickVisualMedia.ImageOnly,
-                            ),
-                        )
-                    },
-                    onDelete = viewModel::deletePhoto,
+            if (AppEdition.isFull) {
+                EditField(
+                    value = form.pestControl,
+                    onValueChange = { value -> viewModel.update { copy(pestControl = value) } },
+                    label = "病虫害防治",
+                    placeholder = "如 蚜虫：发生时用吡虫啉喷雾，注意叶背",
+                    minLines = 2,
                 )
+
+                // 照片增删只在完整版提供。
+                // 注意这里藏的是**整个区块**（含下面那段说明），不是只藏按钮 ——
+                // 否则基础版会看到一段「照片的增删立刻生效」的说明，
+                // 却找不到任何可以增删照片的地方
+                SectionHeader("照片")
+
+                Text(
+                    text = "照片的增删立刻生效，不需要点下面的「保存修改」；" +
+                        "名称与百科内容要点了保存才生效。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                photos.forEach { observation ->
+                    ObservationPhotosCard(
+                        observation = observation,
+                        imageStore = imageStore,
+                        busy = photoBusy,
+                        onAdd = {
+                            addTargetObservationId = observation.observationId
+                            pickPhotosLauncher.launch(
+                                PickVisualMediaRequest(
+                                    ActivityResultContracts.PickVisualMedia.ImageOnly,
+                                ),
+                            )
+                        },
+                        onDelete = viewModel::deletePhoto,
+                    )
+                }
             }
 
             SectionHeader("备注")

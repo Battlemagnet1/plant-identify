@@ -43,6 +43,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.plantidentify.ui.util.openAppSettings
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -195,6 +196,7 @@ private fun ShutterButton(
 
 @Composable
 private fun PermissionDeniedPanel(onCancel: () -> Unit) {
+    val context = LocalContext.current
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -215,6 +217,11 @@ private fun PermissionDeniedPanel(onCancel: () -> Unit) {
         )
         Spacer(Modifier.height(24.dp))
         Button(onClick = onCancel) { Text("返回") }
+        // 永久拒绝后系统不再弹框，「返回」再进来还是这一页 ——
+        // 必须给一条去系统设置的路，否则这一页就是死胡同
+        TextButton(onClick = { openAppSettings(context) }) {
+            Text("去系统设置开启权限", color = Color.White)
+        }
     }
 }
 

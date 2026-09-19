@@ -42,6 +42,11 @@ class PlantIdentifyApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         container = AppContainer(this)
+
+        // 全局未捕获异常：落一份堆栈到 filesDir/crash/，然后把异常交回系统。
+        // **不吞异常** —— 详见 CrashLogger 的注释。放在容器之后，
+        // 这样崩溃日志里能带上版本号与版本类型
+        CrashLogger.install(this)
     }
 }
 

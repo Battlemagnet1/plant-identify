@@ -47,6 +47,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.plantidentify.AppEdition
 import com.plantidentify.data.ai.AiEndpointConfig
 import com.plantidentify.data.ai.AiPreset
 import com.plantidentify.data.ai.PromptStrategy
@@ -359,10 +360,15 @@ fun SettingsScreen(
 
             item { SecurityNoteCard() }
 
-            item { SectionTitle("数据管理") }
+            // 数据管理（导出 HTML / 备份 / 恢复 / 位置开关）整体只在完整版出现。
+            // 这四项都属于完整版功能 —— 基础版若保留入口，点进去会是一个空页面，
+            // 所以连入口一起藏掉，而不是留个空壳让人点
+            if (AppEdition.isFull) {
+                item { SectionTitle("数据管理") }
 
-            item {
-                DataManagementEntry(onOpen = onOpenDataManagement)
+                item {
+                    DataManagementEntry(onOpen = onOpenDataManagement)
+                }
             }
 
             item {

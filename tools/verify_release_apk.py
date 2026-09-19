@@ -41,12 +41,37 @@ import zipfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SDK = os.environ.get("ANDROID_HOME", "C:/Users/a/Android/Sdk")
-DEFAULT_APK = os.path.join(REPO, "app", "build", "outputs", "apk", "release", "app-release.apk")
+
+# ------------------------------------------------ 检查哪个版本
+#
+# 同一份代码出两个 flavor，applicationId 与显示名都不同，期望值也就不同。
+# 用 --edition 指定（也可用环境变量），默认 base —— 它的 applicationId
+# 与历史版本一致，是「本来那个包」。
+_argv = sys.argv[1:]
+EDITION = os.environ.get("EDITION", "base")
+if "--edition" in _argv:
+    _i = _argv.index("--edition")
+    if _i + 1 >= len(_argv):
+        print("--edition 需要跟一个值：base 或 full", file=sys.stderr)
+        sys.exit(2)
+    EDITION = _argv[_i + 1]
+    del _argv[_i:_i + 2]
+
+EDITIONS = {
+    "base": ("com.plantidentify", "Plant Identify Library"),
+    "full": ("com.plantidentify.full", "Plant Identify Library（完整版）"),
+}
+if EDITION not in EDITIONS:
+    print(f"未知版本 {EDITION}，可选：{', '.join(EDITIONS)}", file=sys.stderr)
+    sys.exit(2)
 
 # 与 app/build.gradle.kts 保持一致
-EXPECT_PACKAGE = "com.plantidentify"
+EXPECT_PACKAGE, EXPECT_LABEL = EDITIONS[EDITION]
 EXPECT_VERSION_NAME = "1.0.0"
-EXPECT_LABEL = "Plant Identify Library"
+DEFAULT_APK = os.path.join(
+    REPO, "app", "build", "outputs", "apk", EDITION, "release",
+    f"app-{EDITION}-release.apk",
+)
 
 passed = 0
 failed = 0
@@ -140,10 +165,10 @@ def run(cmd: list[str], timeout: int = 180) -> tuple[int, str]:
 
 # ---------------------------------------------------------------- 0. 前置
 
-apk = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_APK
+apk = _argv[0] if _argv else DEFAULT_APK
 apk = os.path.abspath(apk)
 
-print("[0] 产物与工具")
+print(f"[0] 产物与工具（版本：{EDITION}）")
 if not check(f"APK 存在：{os.path.relpath(apk, REPO)}", os.path.isfile(apk)):
     sys.exit(1)
 print(f"    大小 {os.path.getsize(apk) / 1024 / 1024:.1f} MB"
