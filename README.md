@@ -199,7 +199,7 @@ keyPassword=...
 
 ### 出包自检
 
-签名包出好后跑一遍自检（检查证书、签名方案版本、包名、版本号、显示名、是否 debuggable、包内是否误带密钥等）：
+签名包出好后跑一遍自检（检查 Android SDK 是否可定位、证书、签名方案版本、包名、版本号、显示名、是否 debuggable、包内是否误带密钥等）：
 
 ```bash
 python tools/verify_release_apk.py --edition base

@@ -43,11 +43,12 @@ import urllib.request
 import xml.etree.ElementTree as ET
 
 # 本机相关的路径都可用环境变量覆盖，避免把某台机器的布局写死在仓库里
-ADB = os.environ.get(
-    "ADB",
-    os.path.join(os.environ.get("ANDROID_HOME", "C:/Users/a/Android/Sdk"),
-                 "platform-tools", "adb.exe"),
-)
+# adb 路径：ADB -> ANDROID_HOME / local.properties 的 sdk.dir -> PATH。
+# 全都没有时由 _env 打印可选做法并退出，不会拿一个不存在的路径硬跑。
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _env  # noqa: E402  —— tools/_env.py，统一解析本机环境
+
+ADB = _env.require_adb_or_exit()
 D = os.environ.get("ANDROID_SERIAL", "192.168.253.119:5555")
 MOCK = os.environ.get("MOCK_BASE", "http://127.0.0.1:8899")
 # 允许用环境变量覆盖包名 —— 同一套脚本要能验收 base 与 full 两个版本。
@@ -1057,14 +1058,9 @@ def numbers_on_screen():
 
 print("\n[0] 前置检查")
 
-# 先确认 adb 真的存在。不检查的话，一旦 ADB 环境变量是 Git Bash 风格的
-# `/c/...`（Windows 程序不认），subprocess 会在第一行抛 FileNotFoundError
-# 和一大段 Python 栈 —— 看上去像脚本坏了，其实只是路径风格不对。
-if not os.path.isfile(ADB):
-    print("❌ 找不到 adb：%s" % ADB)
-    print("   提示：ADB 环境变量要用 Windows 风格路径（C:/Users/.../adb.exe），")
-    print("         Git Bash 的 /c/Users/... 传给它无法识别。")
-    sys.exit(1)
+# adb 的存在性已在 _env.require_adb_or_exit() 里校验过：找不到时它已经打印了
+# 三条可选做法并退出；ADB 环境变量指向的文件不可用时它也会警告。
+# 这里不再重复检查 —— 那只会多出一份迟早与 _env 漂移的提示文案。
 
 out = shell("getprop", "ro.build.version.sdk").strip()
 check("设备已连接（API %s）" % out, out.isdigit())

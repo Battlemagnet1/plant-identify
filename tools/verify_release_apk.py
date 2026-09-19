@@ -39,8 +39,13 @@ import sys
 import time
 import zipfile
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SDK = os.environ.get("ANDROID_HOME", "C:/Users/a/Android/Sdk")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _env  # noqa: E402  —— tools/_env.py，统一解析本机环境
+
+REPO = _env.repo_root()
+# SDK 只在 newest_build_tool() 里用。取不到就返回 None 交给下面的 check 报告 ——
+# 这个脚本的价值在于「一次把所有问题报出来」，不该因为缺 SDK 就中断。
+SDK = _env.find_android_sdk(REPO)
 
 # ------------------------------------------------ 检查哪个版本
 #
@@ -89,6 +94,8 @@ def check(label: str, ok: bool, detail: str = "") -> bool:
 
 
 def newest_build_tool(name: str) -> str | None:
+    if not SDK:
+        return None
     root = os.path.join(SDK, "build-tools")
     if not os.path.isdir(root):
         return None
@@ -124,6 +131,13 @@ def find_java_home() -> str | None:
                     candidate = line.split("=", 1)[1].strip().replace("\\:", ":")
                     if os.path.isdir(candidate):
                         return candidate
+
+    # 也看 local.properties：JDK 路径常写在那里（Android Studio 生成的
+    # local.properties 就带这一项），而它被 .gitignore 排除、每台机器各不相同。
+    # read_property 已处理 `\:` 转义与文件不存在两种情况。
+    jh = _env.read_property("org.gradle.java.home", REPO)
+    if jh and os.path.isdir(jh):
+        return jh
 
     found = shutil.which("java")
     if found:
@@ -173,6 +187,11 @@ if not check(f"APK 存在：{os.path.relpath(apk, REPO)}", os.path.isfile(apk)):
     sys.exit(1)
 print(f"    大小 {os.path.getsize(apk) / 1024 / 1024:.1f} MB"
       f"  修改时间 {time.strftime('%Y-%m-%d %H:%M', time.localtime(os.path.getmtime(apk)))}")
+
+check("找到 Android SDK", SDK is not None,
+      _env.MISSING_SDK_HINT.replace("\n", " "))
+if SDK:
+    print(f"    SDK      : {SDK}")
 
 apksigner = newest_build_tool("apksigner")
 aapt2 = newest_build_tool("aapt2")

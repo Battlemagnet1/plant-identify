@@ -257,8 +257,8 @@ prompt 中改为显式告知：`照片1（整株）：…  照片2（叶片）�
 |---|---|---|
 | Git | 2.54.0.windows.1；全局身份 `Battlemagnet1` | 已在 PATH |
 | GitHub CLI | 2.97.0，已登录 Battlemagnet1（scopes: `gist, read:org, repo`） | `C:\Program Files\GitHub CLI\gh` |
-| JDK | **17.0.20** | `C:/Users/a/jdk/jdk17.0.20_8` —— **不在 PATH，须显式指定 `JAVA_HOME`** |
-| Android SDK | 2.9 GB，含 platforms 35/36、build-tools 35.0.0/36.0.0、cmdline-tools/latest、platform-tools(adb)、ndk、cmake，**licenses 已接受** | `C:/Users/a/Android/Sdk` |
+| JDK | **17.0.20** | 装在自定义目录（**不在 PATH**），路径由 `JAVA_HOME` 或 `local.properties` 的 `org.gradle.java.home=` 指定 |
+| Android SDK | 2.9 GB，含 platforms 35/36、build-tools 35.0.0/36.0.0、cmdline-tools/latest、platform-tools(adb)、ndk、cmake，**licenses 已接受** | 路径由 `ANDROID_HOME` 或 `local.properties` 的 `sdk.dir=` 指定 |
 | Gradle | wrapper 发行版已缓存 8.10.2 与 9.3.1 | `~/.gradle/wrapper/dists` |
 | Maven 镜像 | 全局 `~/.gradle/init.gradle` 已配阿里云镜像（google/central/gradle-plugin/public） | 无需额外配置，国内拉依赖顺畅 |
 | debug.keystore | 已存在 | `~/.android/debug.keystore` |
@@ -583,7 +583,7 @@ Phase 2（拍照/相册/本地图片）   验证实验（纯脚本，不依赖 A
 | **依赖** | 无 |
 | **验收标准** | ① `./gradlew assembleDebug` 零错误产出 APK<br>② `./gradlew lint` 无 error 级问题<br>③ Room schema 已导出至 `app/schemas/`<br>④ 真机安装后可在 7 个页面间跳转<br>⑤ 应用可正常冷启动，无崩溃 |
 | **主要风险** | 版本兼容性（AGP/Kotlin/KSP 三者对齐）。**实测已踩到三个坑，均已在工程中规避**：① AGP 9 内置 Kotlin，不能应用 `org.jetbrains.kotlin.android`；② Kotlin 版本被 AGP 锁定为 2.2.10，不可自选；③ KSP 必须用新版独立版本号 2.3.12，与 Kotlin 对齐的旧式 `2.2.10-2.0.2` 会与内置 Kotlin 冲突 |
-| **自检命令** | `JAVA_HOME=C:/Users/a/jdk/jdk17.0.20_8 ./gradlew assembleDebug` |
+| **自检命令** | `JAVA_HOME=<你的 JDK 17 路径> ./gradlew assembleDebug`（JDK 已配在 `local.properties` 时可省略该前缀） |
 
 ### 4.4 Phase 2 —— 图像采集与本地存储
 
@@ -1381,8 +1381,8 @@ Phase 3 的落地使实验成本进一步降低 —— **不需要另写脚本**
 git checkout main && git pull --ff-only
 git checkout -b feature/phaseN-<slug>
 
-# 2. 实现后自检（JAVA_HOME 必须显式指定）
-JAVA_HOME=C:/Users/a/jdk/jdk17.0.20_8 ./gradlew assembleDebug
+# 2. 实现后自检（JDK 17；路径由 JAVA_HOME 或 local.properties 的 org.gradle.java.home 指定）
+JAVA_HOME=<你的 JDK 17 路径> ./gradlew assembleDebug
 
 # 3. 提交
 git add -A

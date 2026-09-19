@@ -31,11 +31,12 @@ import urllib.request
 import xml.etree.ElementTree as ET
 
 # 本机相关的路径都可用环境变量覆盖，避免把某台机器的布局写死在仓库里
-ADB = os.environ.get(
-    "ADB",
-    os.path.join(os.environ.get("ANDROID_HOME", "C:/Users/a/Android/Sdk"),
-                 "platform-tools", "adb.exe"),
-)
+# adb 路径：ADB -> ANDROID_HOME / local.properties 的 sdk.dir -> PATH。
+# 全都没有时由 _env 打印可选做法并退出，不会拿一个不存在的路径硬跑。
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _env  # noqa: E402  —— tools/_env.py，统一解析本机环境
+
+ADB = _env.require_adb_or_exit()
 D = os.environ.get("ANDROID_SERIAL", "192.168.253.119:5555")
 MOCK = os.environ.get("MOCK_BASE", "http://127.0.0.1:8899")
 # 允许用环境变量覆盖包名 —— 同一套脚本要能验收 base 与 full 两个版本。

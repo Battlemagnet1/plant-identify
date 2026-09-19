@@ -15,11 +15,60 @@
 #     界面，「首页渲染出来了」这种断言会假通过
 set -u
 
-ADBEXE="C:/Users/a/Android/Sdk/platform-tools/adb.exe"
-D="192.168.253.119:5555"
-# 路径风格分两套：给 shell 用 MSYS 风格，给 adb 用 Windows 风格
-REPO_MSYS="/d/Users/a/Desktop/plant Identify"
-REPO_WIN="D:/Users/a/Desktop/plant Identify"   # 注意是 D 盘：Git Bash 的 /d/ 对应 D:/
+# ---------------------------------------------------------------- 环境解析
+# 本机相关的一律环境变量优先，取不到再从脚本自身位置推导 —— 不写死任何绝对路径。
+# 这样别人 clone 下来（或自己换一台机器）也能直接跑。
+
+# 仓库根：由脚本自身位置推导，与当前工作目录无关
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-$0}")" && pwd -P)"
+REPO_MSYS="$(cd -- "$SCRIPT_DIR/.." && pwd -P)"
+
+# 仓库根的 local.properties（每台机器一份，git 不跟踪）里的 sdk.dir=
+#   sdk.dir=C\:/Users/you/Android/Sdk  ->  C:/Users/you/Android/Sdk
+LP_SDK=""
+if [ -f "$REPO_MSYS/local.properties" ]; then
+  LP_SDK="$(sed -n 's/^[[:space:]]*sdk\.dir[[:space:]]*=[[:space:]]*//p' \
+              "$REPO_MSYS/local.properties" | head -1 | tr -d '\r' | sed 's/\\:/:/g')"
+fi
+
+# adb：$ADB -> $ANDROID_HOME -> local.properties 的 sdk.dir -> PATH
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) ADB_NAME="adb.exe" ;;
+  *)                    ADB_NAME="adb" ;;
+esac
+if   [ -n "${ADB:-}" ]; then              ADBEXE="${ADB}"
+elif [ -n "${ANDROID_HOME:-}" ]; then     ADBEXE="${ANDROID_HOME}/platform-tools/${ADB_NAME}"
+elif [ -n "$LP_SDK" ]; then               ADBEXE="${LP_SDK}/platform-tools/${ADB_NAME}"
+elif command -v adb >/dev/null 2>&1; then ADBEXE="$(command -v adb)"
+else                                      ADBEXE=""
+fi
+# .exe 在 Git Bash 里 -x 不一定为真，所以 -f 与 -x 取「或」
+if [ -z "$ADBEXE" ] || { [ ! -f "$ADBEXE" ] && [ ! -x "$ADBEXE" ]; }; then
+  echo "找不到 adb（试过 \$ADB / \$ANDROID_HOME / local.properties 的 sdk.dir / PATH）"
+  echo "  请设置 ANDROID_HOME，或把 sdk.dir 写进仓库根的 local.properties"
+  echo "  （参考仓库根的 local.properties.example）"
+  exit 1
+fi
+
+# 设备：ANDROID_SERIAL 优先，默认值与原来一致（模拟器）
+D="${ANDROID_SERIAL:-192.168.253.119:5555}"
+
+# 交给 adb 的路径必须是 Windows 风格：Git Bash 的 /d/... 会让它报 failed to stat，
+# 而 install 的退出码还可能是 0（这就是文件头那条防呆的由来）。
+# 用 cygpath -m 拿正斜杠形式（D:/Users/...），比 -w 的反斜杠稳 —— `\a`、`\U`
+# 这类序列在双引号里太脆。
+REPO_WIN="$REPO_MSYS"
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)
+    if command -v cygpath >/dev/null 2>&1; then
+      REPO_WIN="$(cygpath -m "$REPO_MSYS")"
+    else
+      # 没有 cygpath 时手工把 /d/Users/... 转成 D:/Users/...
+      REPO_WIN="$(printf '%s' "$REPO_MSYS" | sed -E 's#^/([a-zA-Z])/#\U\1:/#')"
+    fi
+    ;;
+esac
+
 APK_BASE_WIN="$REPO_WIN/app/build/outputs/apk/base/debug/app-base-debug.apk"
 APK_FULL_WIN="$REPO_WIN/app/build/outputs/apk/full/debug/app-full-debug.apk"
 
