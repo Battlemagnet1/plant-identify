@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    FileProvider 可分享的路径（Phase 6：导出 HTML 与备份包）。
+
+    ## 为什么只开放两个子目录
+
+    导出物都落在 filesDir 的两个子目录里。**绝不能**写成 `<root-path>` 或
+    `files-path path="."` —— 那会把整个私有目录（含 DataStore 里的
+    AI 配置、以及用户全部原图）都暴露给任何拿到 URI 的应用。
+    只开放 exports/ 与 backups/ 这两个专门放导出物的目录。
+-->
+<paths>
+    <!-- 导出的 HTML 报告（单文件或 zip） -->
+    <files-path
+        name="exports"
+        path="exports/" />
+
+    <!-- 备份包 zip -->
+    <files-path
+        name="backups"
+        path="backups/" />
+</paths>

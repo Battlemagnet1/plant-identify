@@ -232,4 +232,28 @@ interface PlantRecordDao {
     @Transaction
     @Query("SELECT * FROM plant_record ORDER BY updatedAt DESC")
     fun observeAllWithObservations(): Flow<List<PlantWithObservations>>
+
+    /**
+     * 一次性读出全部档案，含观察与图片（导出与备份用）。
+     *
+     * 按 `createdAt` **升序**而不是列表页的 `updatedAt` 降序：
+     * 报告里的编号（01、02…）与备份内容都应当稳定且有时间顺序，
+     * 按「最近修改」排会让同一份数据每次导出得到不同的编号。
+     */
+    @Transaction
+    @Query("SELECT * FROM plant_record ORDER BY createdAt ASC")
+    suspend fun getAllWithObservationsAndImages(): List<PlantWithObservationsAndImages>
+
+    // ---------- 备份与恢复 ----------
+
+    /**
+     * 全量读出（含已删除标记之外的一切）。
+     *
+     * 备份必须连 id 一起带走 —— 恢复时按原 id 写回，三张表的外键关系才不会错位。
+     */
+    @Query("SELECT * FROM plant_record ORDER BY id ASC")
+    suspend fun getAll(): List<PlantRecordEntity>
+
+    @Query("DELETE FROM plant_record")
+    suspend fun clearAll()
 }

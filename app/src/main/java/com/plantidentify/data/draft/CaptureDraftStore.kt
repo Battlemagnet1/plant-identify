@@ -88,6 +88,13 @@ class CaptureDraftStore(private val context: Context) {
             .apply {
                 // 只在需要时写这个字段，让「普通新建」的草稿保持原来的形状
                 draft.targetObservationId?.let { put(FIELD_TARGET_OBSERVATION, it) }
+                // 位置三件套：拿不到就一个都不写（而不是写 null），
+                // 这样「没有位置」的草稿与 Phase 6 之前的草稿形状完全一致
+                if (draft.latitude != null && draft.longitude != null) {
+                    put(FIELD_LATITUDE, draft.latitude)
+                    put(FIELD_LONGITUDE, draft.longitude)
+                }
+                draft.locationName?.let { put(FIELD_LOCATION_NAME, it) }
             }
             .toString()
     }
@@ -113,6 +120,13 @@ class CaptureDraftStore(private val context: Context) {
                 images = images.take(CaptureDraft.MAX_IMAGES),
                 targetObservationId = root.optLong(FIELD_TARGET_OBSERVATION)
                     .takeIf { root.has(FIELD_TARGET_OBSERVATION) && it > 0L },
+                // 经纬度必须成对出现：只有一个的话宁可都不要，
+                // 半个坐标既显示不出来也没法用来定位
+                latitude = root.optDouble(FIELD_LATITUDE)
+                    .takeIf { root.has(FIELD_LATITUDE) && !it.isNaN() },
+                longitude = root.optDouble(FIELD_LONGITUDE)
+                    .takeIf { root.has(FIELD_LONGITUDE) && !it.isNaN() },
+                locationName = root.optString(FIELD_LOCATION_NAME).takeIf { it.isNotBlank() },
             )
         }.getOrElse { error ->
             // 草稿损坏（例如升级过程中断导致写了一半）不应让应用崩溃
@@ -131,5 +145,8 @@ class CaptureDraftStore(private val context: Context) {
         const val FIELD_PATH = "path"
         const val FIELD_ROLE = "role"
         const val FIELD_TARGET_OBSERVATION = "targetObservationId"
+        const val FIELD_LATITUDE = "latitude"
+        const val FIELD_LONGITUDE = "longitude"
+        const val FIELD_LOCATION_NAME = "locationName"
     }
 }

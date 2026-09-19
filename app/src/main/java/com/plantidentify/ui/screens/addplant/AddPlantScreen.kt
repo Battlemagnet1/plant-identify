@@ -76,6 +76,11 @@ fun AddPlantScreen(
     uploadPlan: UploadPlan?,
     imageStore: ImageStore,
     capturedTempPath: String?,
+    askLocation: Boolean,
+    locationSummary: String?,
+    onLocationAllowed: () -> Unit,
+    onLocationDenied: () -> Unit,
+    onCaptureLocation: () -> Unit,
     onCapturedTempConsumed: () -> Unit,
     onImportUris: (List<Uri>) -> Unit,
     onImportCapture: (File) -> Unit,
@@ -115,6 +120,15 @@ fun AddPlantScreen(
         pickImagesLauncher.launch(
             PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
         )
+    }
+
+    // 位置权限（规格书第十八节）。拒绝是正常路径，不做任何惩罚性处理 ——
+    // 应用照常拍照、识别、存档案，只是不记录地点。
+    val locationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        // 授权后才去取坐标；被拒就什么都不做
+        if (granted) onCaptureLocation()
     }
 
     // 相机拍完回传的临时文件：导入正式目录并消费掉
@@ -161,6 +175,18 @@ fun AddPlantScreen(
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Medium,
                 )
+            }
+
+            // 地点是可选的：取不到就整行不显示，而不是显示「未知位置」占位 ——
+            // 后者会让人以为定位坏了
+            locationSummary?.let { summary ->
+                item {
+                    Text(
+                        text = "📍 $summary",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
 
             if (importing) {
@@ -242,6 +268,35 @@ fun AddPlantScreen(
             },
             dismissButton = {
                 TextButton(onClick = { showDiscardDialog = false }) { Text("继续编辑") }
+            },
+        )
+    }
+
+    // 首次使用位置功能时的询问（规格书第十八节的文案）。
+    // 只问一次：之后再进来直接按上次的选择走，用户想改去设置页。
+    if (askLocation) {
+        AlertDialog(
+            onDismissRequest = { /* 必须显式选择，不允许点外部关掉 */ },
+            title = { Text("记录观察地点？") },
+            text = {
+                Text(
+                    "开启后，保存植物档案时会一并记下拍摄地点，" +
+                        "方便日后按地点查找。\n\n" +
+                        "地点只存在本机，不会上传。不开启也不影响识别与档案。",
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onLocationAllowed()
+                        locationPermissionLauncher.launch(
+                            Manifest.permission.ACCESS_COARSE_LOCATION,
+                        )
+                    },
+                ) { Text("允许") }
+            },
+            dismissButton = {
+                TextButton(onClick = onLocationDenied) { Text("暂不允许") }
             },
         )
     }

@@ -66,6 +66,11 @@ interface ObservationImageDao {
     @Query("SELECT * FROM observation_image")
     suspend fun getAll(): List<ObservationImageEntity>
 
+    // ---------- 备份与恢复 ----------
+
+    @Query("DELETE FROM observation_image")
+    suspend fun clearAll()
+
     /**
      * 某株植物全部观察的 id。
      *

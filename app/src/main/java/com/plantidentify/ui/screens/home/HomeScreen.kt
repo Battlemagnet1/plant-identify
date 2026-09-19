@@ -51,6 +51,7 @@ fun HomeScreen(
     onOpenPlantDetail: (Long) -> Unit,
     onOpenObservation: (Long) -> Unit,
     onOpenRecognition: () -> Unit,
+    onOpenStats: () -> Unit,
     imageStore: ImageStore,
     viewModel: HomeViewModel,
     modifier: Modifier = Modifier,
@@ -109,7 +110,7 @@ fun HomeScreen(
 
             SearchEntry(onClick = onSearch)
 
-            StatisticsCard(statistics)
+            StatisticsCard(statistics, onClick = onOpenStats)
 
             SectionTitle(
                 if (cards.isEmpty()) "植物档案" else "植物档案（${cards.size}）",
@@ -222,9 +223,10 @@ private fun SearchEntry(onClick: () -> Unit) {
  * 三者分母语义不同，因此必须并列展示并给出说明，避免被误读为同一维度。
  */
 @Composable
-private fun StatisticsCard(statistics: PlantStatistics) {
+private fun StatisticsCard(statistics: PlantStatistics, onClick: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth(),
+        onClick = onClick,
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.primaryContainer,
         ),
@@ -256,6 +258,14 @@ private fun StatisticsCard(statistics: PlantStatistics) {
                     color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.75f),
                 )
             }
+
+            // 卡片能点就必须让人看出来能点 —— 否则这个入口等于不存在
+            Spacer(Modifier.height(10.dp))
+            Text(
+                text = "查看统计详情 ›",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.primary,
+            )
         }
     }
 }

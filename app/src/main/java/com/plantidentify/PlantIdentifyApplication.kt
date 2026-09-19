@@ -9,9 +9,14 @@ import com.plantidentify.data.ai.OpenAICompatibleTextProvider
 import com.plantidentify.data.ai.OpenAICompatibleVisionProvider
 import com.plantidentify.data.ai.TextProvider
 import com.plantidentify.data.ai.VisionProvider
+import com.plantidentify.data.backup.BackupManager
 import com.plantidentify.data.draft.CaptureDraftStore
+import com.plantidentify.data.export.DataExporter
+import com.plantidentify.data.export.ReportThumbnailer
 import com.plantidentify.data.image.ImageCompressor
 import com.plantidentify.data.local.PlantIdentifyDatabase
+import com.plantidentify.data.location.LocationProvider
+import com.plantidentify.data.location.LocationSettingsStore
 import com.plantidentify.data.repository.PlantRepository
 import com.plantidentify.data.storage.ImageStore
 import kotlinx.coroutines.CoroutineScope
@@ -65,6 +70,43 @@ class AppContainer(context: Context) {
 
     /** AI 服务配置（DataStore + Keystore 加密存放 API Key） */
     val aiSettingsStore: AiSettingsStore by lazy { AiSettingsStore(appContext) }
+
+    /** 位置功能：用户的开关与「是否已询问过」（DataStore） */
+    val locationSettingsStore: LocationSettingsStore by lazy { LocationSettingsStore(appContext) }
+
+    /**
+     * 取坐标与反向地理编码。
+     *
+     * 全程可失败且失败只返回 null —— 位置是可选功能，
+     * 拒绝授权或解析不出地名都不能影响识别与档案（规格书第十八节）。
+     */
+    val locationProvider: LocationProvider by lazy { LocationProvider(appContext) }
+
+    /** 报告缩略图（1024px / JPEG 75，派生数据放 cacheDir，可重建） */
+    private val reportThumbnailer: ReportThumbnailer by lazy { ReportThumbnailer(appContext) }
+
+    /** HTML 导出（规格书第二十一节，三级体积策略） */
+    val dataExporter: DataExporter by lazy {
+        DataExporter(
+            context = appContext,
+            imageStore = imageStore,
+            thumbnailer = reportThumbnailer,
+        )
+    }
+
+    /**
+     * 数据备份与恢复（规格书第二十二节）。
+     *
+     * 需要数据库本体而不只是仓库 —— 恢复要整体替换三张表，
+     * 并把三张表的清空 + 写入放进同一个事务里。
+     */
+    val backupManager: BackupManager by lazy {
+        BackupManager(
+            context = appContext,
+            database = database,
+            imageStore = imageStore,
+        )
+    }
 
     /**
      * 共享的 HTTP 客户端。

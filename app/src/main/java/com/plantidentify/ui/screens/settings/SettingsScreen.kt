@@ -66,6 +66,7 @@ import com.plantidentify.ui.components.BackIconButton
 @Composable
 fun SettingsScreen(
     onBack: () -> Unit,
+    onOpenDataManagement: () -> Unit,
     viewModel: SettingsViewModel,
     modifier: Modifier = Modifier,
 ) {
@@ -358,6 +359,12 @@ fun SettingsScreen(
 
             item { SecurityNoteCard() }
 
+            item { SectionTitle("数据管理") }
+
+            item {
+                DataManagementEntry(onOpen = onOpenDataManagement)
+            }
+
             item {
                 OutlinedButton(
                     onClick = viewModel::clearAll,
@@ -368,6 +375,46 @@ fun SettingsScreen(
             }
 
             item { Spacer(Modifier.height(24.dp)) }
+        }
+    }
+}
+
+/**
+ * 数据管理入口（Phase 6）。
+ *
+ * 导出 HTML、备份、恢复、位置开关都收在独立页面里 ——
+ * 它们同属「数据进出的口子」，塞进设置页会把 AI 配置挤得找不到。
+ */
+@Composable
+private fun DataManagementEntry(onOpen: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        onClick = onOpen,
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "导出 · 备份 · 恢复 · 位置",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Text(
+                    text = "导出 HTML 报告、备份全部档案与照片、从备份恢复",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Text(
+                text = "›",
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }

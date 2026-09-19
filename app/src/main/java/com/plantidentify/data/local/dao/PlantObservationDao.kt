@@ -73,6 +73,27 @@ interface PlantObservationDao {
     @Query("SELECT COUNT(*) FROM plant_observation")
     fun observeObservationCount(): Flow<Int>
 
+    /**
+     * 全部已记录的地点名（去重）。
+     *
+     * 地点筛选的候选取自这里，而不是写死一份行政区划表 ——
+     * 用户去过哪些地方，候选里才有那些地方。
+     * 只取地名不取坐标：筛选是给人用的，人记的是「在哪」而不是经纬度。
+     */
+    @Query(
+        "SELECT DISTINCT locationName FROM plant_observation " +
+            "WHERE locationName IS NOT NULL AND locationName != '' ORDER BY locationName",
+    )
+    fun observeLocationNames(): Flow<List<String>>
+
+    // ---------- 备份与恢复 ----------
+
+    @Query("SELECT * FROM plant_observation ORDER BY id ASC")
+    suspend fun getAll(): List<PlantObservationEntity>
+
+    @Query("DELETE FROM plant_observation")
+    suspend fun clearAll()
+
     // ---------- 关系查询 ----------
 
     @Transaction

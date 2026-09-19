@@ -61,6 +61,22 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!--
+            Phase 6：把导出的 HTML 与备份包分享出去。
+
+            exported="false" + grantUriPermissions：只有通过我们主动授权的
+            单个文件 URI 才能被外部应用读取，不暴露任何目录给别的应用浏览。
+        -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
 
 </manifest>

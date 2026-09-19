@@ -13,6 +13,8 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.plantidentify.AppContainer
 import com.plantidentify.ui.camera.CameraCaptureScreen
+import com.plantidentify.ui.screens.data.DataManagementScreen
+import com.plantidentify.ui.screens.data.DataManagementViewModel
 import com.plantidentify.ui.screens.edit.PlantEditScreen
 import com.plantidentify.ui.screens.edit.PlantEditViewModel
 import com.plantidentify.ui.screens.observation.ObservationViewModel
@@ -29,6 +31,8 @@ import com.plantidentify.ui.screens.recognition.RecognitionViewModel
 import com.plantidentify.ui.screens.search.SearchScreen
 import com.plantidentify.ui.screens.settings.SettingsScreen
 import com.plantidentify.ui.screens.settings.SettingsViewModel
+import com.plantidentify.ui.screens.stats.StatsScreen
+import com.plantidentify.ui.screens.stats.StatsViewModel
 
 /**
  * 导航图（规格书第二十七节）。
@@ -64,6 +68,7 @@ fun PlantIdentifyNavHost(
                     navController.navigateSingleTop(Routes.observation(observationId))
                 },
                 onOpenRecognition = { navController.navigateSingleTop(Routes.RECOGNITION) },
+                onOpenStats = { navController.navigateSingleTop(Routes.STATS) },
                 imageStore = container.imageStore,
                 viewModel = homeViewModel,
             )
@@ -75,6 +80,8 @@ fun PlantIdentifyNavHost(
                     imageStore = container.imageStore,
                     draftStore = container.captureDraftStore,
                     imageCompressor = container.imageCompressor,
+                    locationSettingsStore = container.locationSettingsStore,
+                    locationProvider = container.locationProvider,
                     externalScope = container.applicationScope,
                 ),
             )
@@ -83,6 +90,8 @@ fun PlantIdentifyNavHost(
             val importing by addPlantViewModel.importing.collectAsStateWithLifecycle()
             val message by addPlantViewModel.message.collectAsStateWithLifecycle()
             val uploadPlan by addPlantViewModel.uploadPlan.collectAsStateWithLifecycle()
+            val askLocation by addPlantViewModel.askLocation.collectAsStateWithLifecycle()
+            val locationSummary by addPlantViewModel.locationSummary.collectAsStateWithLifecycle()
 
             // 相机页拍完回传的临时文件路径
             val capturedTempPath by backStackEntry.savedStateHandle
@@ -96,6 +105,11 @@ fun PlantIdentifyNavHost(
                 uploadPlan = uploadPlan,
                 imageStore = container.imageStore,
                 capturedTempPath = capturedTempPath,
+                askLocation = askLocation,
+                locationSummary = locationSummary,
+                onLocationAllowed = addPlantViewModel::onLocationAllowed,
+                onLocationDenied = addPlantViewModel::onLocationDenied,
+                onCaptureLocation = addPlantViewModel::captureLocation,
                 onCapturedTempConsumed = {
                     backStackEntry.savedStateHandle.remove<String>(Routes.KEY_CAPTURED_TEMP_PATH)
                 },
@@ -180,6 +194,32 @@ fun PlantIdentifyNavHost(
             )
         }
 
+        composable(Routes.STATS) {
+            val statsViewModel: StatsViewModel = viewModel(
+                factory = StatsViewModel.factory(repository = container.plantRepository),
+            )
+
+            StatsScreen(
+                onBack = navController::popBackStack,
+                viewModel = statsViewModel,
+            )
+        }
+
+        composable(Routes.DATA_MANAGEMENT) {
+            val dataViewModel: DataManagementViewModel = viewModel(
+                factory = DataManagementViewModel.factory(
+                    repository = container.plantRepository,
+                    exporter = container.dataExporter,
+                    backupManager = container.backupManager,
+                    locationSettingsStore = container.locationSettingsStore,
+                ),
+            )
+            DataManagementScreen(
+                onBack = navController::popBackStack,
+                viewModel = dataViewModel,
+            )
+        }
+
         composable(Routes.SETTINGS) {
             val settingsViewModel: SettingsViewModel = viewModel(
                 factory = SettingsViewModel.factory(
@@ -192,6 +232,9 @@ fun PlantIdentifyNavHost(
             SettingsScreen(
                 viewModel = settingsViewModel,
                 onBack = navController::popBackStack,
+                onOpenDataManagement = {
+                    navController.navigateSingleTop(Routes.DATA_MANAGEMENT)
+                },
             )
         }
 

@@ -30,8 +30,14 @@ object Routes {
     /** 搜索与筛选（Phase 5） */
     const val SEARCH = "search"
 
-    /** 设置（Phase 3 起承载 AI 服务配置） */
+    /** 设置（Phase 3 起承载 AI 服务配置；Phase 6 起承载数据管理） */
     const val SETTINGS = "settings"
+
+    /** 植物统计（Phase 6，规格书第二十节） */
+    const val STATS = "stats"
+
+    /** 数据管理：位置记录 / 导出 HTML / 备份与恢复（Phase 6，规格书第二十一、二十二节） */
+    const val DATA_MANAGEMENT = "data_management"
 
     private const val ARG_PLANT_ID = "plantId"
     private const val ARG_OBSERVATION_ID = "observationId"

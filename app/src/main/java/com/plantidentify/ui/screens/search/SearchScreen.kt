@@ -67,6 +67,7 @@ fun SearchScreen(
     val cards by viewModel.cards.collectAsStateWithLifecycle()
     val families by viewModel.families.collectAsStateWithLifecycle()
     val genera by viewModel.genera.collectAsStateWithLifecycle()
+    val places by viewModel.places.collectAsStateWithLifecycle()
     val allCards by viewModel.allCards.collectAsStateWithLifecycle()
 
     val keyboard = LocalSoftwareKeyboardController.current
@@ -121,6 +122,17 @@ fun SearchScreen(
                     options = genera,
                     selected = filters.genus,
                     onSelect = viewModel::setGenus,
+                )
+            }
+
+            // ---- 地点：Phase 6 补上。只有库里真的记过地点才显示这一行 ——
+            // 一列永远选不出东西的空候选比没有还糟，用户会以为筛选坏了
+            if (places.isNotEmpty()) {
+                FilterRow(
+                    title = "地点",
+                    options = places,
+                    selected = filters.place,
+                    onSelect = viewModel::setPlace,
                 )
             }
 

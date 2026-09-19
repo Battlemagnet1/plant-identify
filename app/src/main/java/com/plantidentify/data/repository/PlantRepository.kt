@@ -3,6 +3,7 @@ package com.plantidentify.data.repository
 import androidx.room.withTransaction
 import com.plantidentify.data.ai.PlantAnalysis
 import com.plantidentify.data.ai.RecognitionResult
+import com.plantidentify.data.draft.CaptureDraft
 import com.plantidentify.data.draft.CaptureDraftStore
 import com.plantidentify.data.draft.DraftImage
 import com.plantidentify.data.local.PlantIdentifyDatabase
@@ -11,6 +12,7 @@ import com.plantidentify.data.local.entity.ObservationImageEntity
 import com.plantidentify.data.local.entity.PlantObservationEntity
 import com.plantidentify.data.local.entity.PlantRecordEntity
 import com.plantidentify.data.local.projection.PlantCardRow
+import com.plantidentify.data.local.relation.PlantWithObservationsAndImages
 import com.plantidentify.data.storage.ImageStore
 import com.plantidentify.domain.model.MergeLevel
 import com.plantidentify.domain.model.MergeSuggestion
@@ -95,7 +97,6 @@ class PlantRepository(
     suspend fun saveAsNewPlant(
         result: RecognitionResult,
         rawAiJson: String,
-        locationName: String? = null,
     ): Result<Long> = runCatching {
         val draft = draftStore.current()
         require(!draft.isEmpty) { "没有可保存的照片" }
@@ -123,7 +124,7 @@ class PlantRepository(
                 timestamp = now,
                 isPrimary = true,
                 rawAiJson = rawAiJson,
-                locationName = locationName,
+                draft = draft,
             )
 
             insertImages(observationId, draft.images)
@@ -150,7 +151,6 @@ class PlantRepository(
         plantId: Long,
         result: RecognitionResult,
         rawAiJson: String,
-        locationName: String? = null,
     ): Result<Long> = runCatching {
         val draft = draftStore.current()
         require(!draft.isEmpty) { "没有可保存的照片" }
@@ -167,7 +167,7 @@ class PlantRepository(
                 // 新观察不抢占代表观察 —— 封面由用户或 Phase 5 决定
                 isPrimary = false,
                 rawAiJson = rawAiJson,
-                locationName = locationName,
+                draft = draft,
             )
             insertImages(observationId, draft.images)
 
@@ -195,8 +195,26 @@ class PlantRepository(
     suspend fun plantNameOf(plantId: Long): String =
         plantRecordDao.getById(plantId)?.name.orEmpty()
 
+    /**
+     * 地点筛选的候选：库里真实出现过的地名。
+     *
+     * 不写死行政区划表 —— 用户去过哪里，候选里才有哪里。
+     * 地点为空（拒绝授权/关掉位置）时这里是空列表，界面自然不显示这一组筛选。
+     */
+    fun observeLocationNames(): Flow<List<String>> = observationDao.observeLocationNames()
+
     /** 全部植物卡片（按最近更新排序） */
     fun observePlantCards(): Flow<List<PlantCardRow>> = plantRecordDao.observePlantCards()
+
+    /**
+     * 一次性读出全部档案（含观察与图片），供导出使用。
+     *
+     * 与 [observePlantCards] 的区别：那个是列表页要的轻量投影（几个字段 + 计数），
+     * 这个是导出要的**全字段 + 全部图片行**。分成两个查询是有意的 ——
+     * 让列表页去加载所有百科正文与图片路径纯属浪费。
+     */
+    suspend fun loadArchive(): List<PlantWithObservationsAndImages> =
+        plantRecordDao.getAllWithObservationsAndImages()
 
     /**
      * 搜索与筛选。
@@ -387,7 +405,18 @@ class PlantRepository(
             imageDao.deleteByObservation(observationId)
             insertImages(observationId, draft.images)
 
-            observationDao.update(observation.copy(aiResultJson = rawAiJson))
+            // 地点跟着新照片走：用户可能换了个地方重拍。
+            // 但草稿里没有坐标时（关掉了位置、或没授权）保留原值 ——
+            // 不能因为这次没取到地点就把上次记好的抹掉。
+            val hasNewLocation = draft.latitude != null && draft.longitude != null
+            observationDao.update(
+                observation.copy(
+                    aiResultJson = rawAiJson,
+                    latitude = if (hasNewLocation) draft.latitude else observation.latitude,
+                    longitude = if (hasNewLocation) draft.longitude else observation.longitude,
+                    locationName = if (hasNewLocation) draft.locationName else observation.locationName,
+                ),
+            )
 
             // 档案上的置信度跟随最近一次识别
             plantRecordDao.getById(observation.plantId)?.let { plant ->
@@ -517,19 +546,29 @@ class PlantRepository(
 
     // ---------------- 内部 ----------------
 
+    /**
+     * 新建一条观察记录。
+     *
+     * 地点从**草稿**里读，而不是由调用方再传一遍。
+     *
+     * 草稿是拍摄那一刻的快照（spec 第十八节：用户点进「添加植物」时人就在植物跟前，
+     * 那一刻的坐标才是这株植物的位置），地点三件套在草稿里是原子的一组。
+     * 让调用方另行传 locationName 会出现「传了名字却漏了坐标」这类半吊子状态，
+     * 而且实际上没有任何调用方传过它 —— 那个参数从 Phase 4 起就是死的。
+     */
     private suspend fun insertObservation(
         plantId: Long,
         timestamp: Long,
         isPrimary: Boolean,
         rawAiJson: String,
-        locationName: String?,
+        draft: CaptureDraft,
     ): Long = observationDao.insert(
         PlantObservationEntity(
             plantId = plantId,
             timestamp = timestamp,
-            latitude = null,
-            longitude = null,
-            locationName = locationName,
+            latitude = draft.latitude,
+            longitude = draft.longitude,
+            locationName = draft.locationName,
             aiResultJson = rawAiJson,
             isPrimary = isPrimary,
         ),

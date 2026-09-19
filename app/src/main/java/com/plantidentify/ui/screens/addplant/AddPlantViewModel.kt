@@ -11,6 +11,8 @@ import com.plantidentify.data.draft.CaptureDraftStore
 import com.plantidentify.data.draft.DraftImage
 import com.plantidentify.data.image.ImageCompressor
 import com.plantidentify.data.local.entity.ImageRole
+import com.plantidentify.data.location.LocationProvider
+import com.plantidentify.data.location.LocationSettingsStore
 import com.plantidentify.data.storage.ImageStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -44,6 +46,8 @@ class AddPlantViewModel(
     private val imageStore: ImageStore,
     private val draftStore: CaptureDraftStore,
     private val imageCompressor: ImageCompressor,
+    private val locationSettingsStore: LocationSettingsStore,
+    private val locationProvider: LocationProvider,
     private val externalScope: CoroutineScope,
 ) : ViewModel() {
 
@@ -80,6 +84,88 @@ class AddPlantViewModel(
     /** 正在导入图片（复制 + 解码可能耗时） */
     private val _importing = MutableStateFlow(false)
     val importing: StateFlow<Boolean> = _importing.asStateFlow()
+
+    // ---------------- 观察地点（规格书第十八节） ----------------
+
+    /** 是否要弹「是否记录植物观察地点？」——只在该问的时候为 true */
+    private val _askLocation = MutableStateFlow(false)
+    val askLocation: StateFlow<Boolean> = _askLocation.asStateFlow()
+
+    /**
+     * 已取到的地点，供页面显示。取不到就是 null，UI 什么都不显示。
+     *
+     * 直接由草稿派生而不是另存一份状态：地点是草稿的一部分，
+     * 两处各存一份迟早会不一致（比如用户放弃了草稿，标签却还挂着上次的地点）。
+     * 只有草稿里已经有照片时才显示 —— 空草稿下挂个地名没有意义。
+     */
+    val locationSummary: StateFlow<String?> = draftStore.draft
+        .map { draft ->
+            if (draft.isEmpty) return@map null
+            draft.locationName?.takeIf { it.isNotBlank() }
+                ?: draft.latitude?.let { formatCoordinate(it, draft.longitude) }
+        }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
+            initialValue = null,
+        )
+
+    init {
+        // 首次进来问一次；已经同意过就直接取，不再打扰
+        viewModelScope.launch {
+            val choice = locationSettingsStore.current()
+            when {
+                !choice.asked -> _askLocation.value = true
+                choice.enabled -> captureLocation()
+                else -> Unit
+            }
+        }
+    }
+
+    /** 用户点了「允许」。系统权限申请由 UI 发起，授权后再调 [captureLocation] */
+    fun onLocationAllowed() {
+        _askLocation.value = false
+        externalScope.launch { locationSettingsStore.setEnabled(true) }
+    }
+
+    /**
+     * 用户点了「暂不允许」。
+     *
+     * 只记「问过了」，不动开关 —— 用户将来想开可以去设置页，
+     * 而不是被反复弹窗逼着同意。
+     */
+    fun onLocationDenied() {
+        _askLocation.value = false
+        externalScope.launch { locationSettingsStore.markAsked() }
+    }
+
+    /**
+     * 取一次坐标并写进草稿。
+     *
+     * 任何一步失败都只是「这次没有地点」，不影响照片与后续识别 ——
+     * 位置是可选功能，不能因为它失败而让主流程停下来。
+     */
+    fun captureLocation() {
+        if (!locationProvider.hasPermission()) return
+        externalScope.launch {
+            val coordinate = locationProvider.currentCoordinate() ?: return@launch
+            // 地理编码可能失败（国内 ROM 上很常见），失败就不写地名，只留坐标
+            val name = locationProvider.reverseGeocode(coordinate)
+            draftStore.update { draft ->
+                draft.copy(
+                    latitude = coordinate.latitude,
+                    longitude = coordinate.longitude,
+                    locationName = name,
+                )
+            }
+        }
+    }
+
+    /** 无法解析出地名时退化为经纬度显示（规格书：优先地名，但不强制） */
+    private fun formatCoordinate(latitude: Double, longitude: Double?): String {
+        val lng = longitude ?: return "%.4f".format(latitude)
+        return "%.4f, %.4f".format(latitude, lng)
+    }
 
     /** 从相册选择结果导入 */
     fun importUris(uris: List<Uri>) {
@@ -240,10 +326,19 @@ class AddPlantViewModel(
             imageStore: ImageStore,
             draftStore: CaptureDraftStore,
             imageCompressor: ImageCompressor,
+            locationSettingsStore: LocationSettingsStore,
+            locationProvider: LocationProvider,
             externalScope: CoroutineScope,
         ): ViewModelProvider.Factory = viewModelFactory {
             initializer {
-                AddPlantViewModel(imageStore, draftStore, imageCompressor, externalScope)
+                AddPlantViewModel(
+                    imageStore,
+                    draftStore,
+                    imageCompressor,
+                    locationSettingsStore,
+                    locationProvider,
+                    externalScope,
+                )
             }
         }
     }

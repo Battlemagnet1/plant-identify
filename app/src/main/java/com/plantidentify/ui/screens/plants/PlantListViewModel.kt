@@ -81,6 +81,19 @@ class PlantListViewModel(
             initialValue = emptyList(),
         )
 
+    /**
+     * 地点候选（Phase 6）。
+     *
+     * 直接查观察表而不是从 [allCards] 派生 —— 地名挂在**观察**上而非档案上，
+     * 一张卡片可能对应多个地点，从卡片投影里取不出来。
+     */
+    val places: StateFlow<List<String>> = repository.observeLocationNames()
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
+            initialValue = emptyList(),
+        )
+
     fun setKeyword(value: String) = _filters.update { it.copy(keyword = value) }
 
     fun setFamily(value: String) = _filters.update { it.copy(family = value) }
