@@ -12,6 +12,8 @@ import com.plantidentify.data.ai.TextAnalysisResult
 import com.plantidentify.data.ai.TextProvider
 import com.plantidentify.data.ai.TolerantJsonParser
 import com.plantidentify.data.local.entity.AnalysisStatus
+import com.plantidentify.data.location.LocationSettingsStore
+import com.plantidentify.data.location.aiPlaceHint
 import com.plantidentify.data.local.relation.PlantWithObservationsAndImages
 import com.plantidentify.data.repository.PlantRepository
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -40,6 +42,7 @@ class PlantDetailViewModel(
     private val repository: PlantRepository,
     private val textProvider: TextProvider,
     private val aiSettingsStore: AiSettingsStore,
+    private val locationSettingsStore: LocationSettingsStore,
 ) : ViewModel() {
 
     val detail: StateFlow<PlantWithObservationsAndImages?> =
@@ -129,6 +132,21 @@ class PlantDetailViewModel(
             try {
                 repository.markAnalysisPending(plantId)
 
+                // 地点弱先验取「最近一次观察」的那份 ——
+                // 重新生成百科时用户关心的是这株最近的状况，
+                // 而不是它第一次被记录时的位置。同样受「允许上传」开关约束。
+                val latest = detail.value?.observations
+                    ?.maxByOrNull { it.observation.timestamp }
+                    ?.observation
+                val place = locationSettingsStore.current().let { choice ->
+                    aiPlaceHint(
+                        shareWithAi = choice.shareWithAi,
+                        locationName = latest?.locationName,
+                        latitude = latest?.latitude,
+                        longitude = latest?.longitude,
+                    )
+                }
+
                 // 置信度取档案上记录的最近一次识别结果，用于决定
                 // prompt 是否要退化为属/科的通用特征
                 val result = textProvider.generateAnalysis(
@@ -140,6 +158,7 @@ class PlantDetailViewModel(
                         category = plant.category,
                         confidence = plant.confidence,
                         config = config,
+                        place = place,
                     ),
                 )
 
@@ -176,9 +195,12 @@ class PlantDetailViewModel(
             repository: PlantRepository,
             textProvider: TextProvider,
             aiSettingsStore: AiSettingsStore,
+            locationSettingsStore: LocationSettingsStore,
         ): ViewModelProvider.Factory = viewModelFactory {
             initializer {
-                PlantDetailViewModel(plantId, repository, textProvider, aiSettingsStore)
+                PlantDetailViewModel(
+                    plantId, repository, textProvider, aiSettingsStore, locationSettingsStore,
+                )
             }
         }
     }

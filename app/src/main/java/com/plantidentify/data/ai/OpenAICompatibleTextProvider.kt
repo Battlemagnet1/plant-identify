@@ -36,7 +36,11 @@ class OpenAICompatibleTextProvider(
             return TextAnalysisResult.Failure(AiFailure.NotConfigured(config.missingFields))
         }
 
-        var includeStructuredParams = true
+        // 与视觉通道同样的策略：**默认不带** response_format。
+        // 文字请求体很小，重传的代价远低于图片那一次，但「被拒后重试」
+        // 仍然白白多一个往返；而 prompt 已经强制「只输出 JSON」，
+        // 解析侧也有容错。只有解析真的失败时才把它打开（见下）。
+        var includeStructuredParams = false
         var correction: String? = null
 
         repeat(MAX_ATTEMPTS) { attempt ->
@@ -62,6 +66,7 @@ class OpenAICompatibleTextProvider(
                             if (attempt < MAX_ATTEMPTS - 1) {
                                 correction = "你上次的输出无法解析：${parsed.reason}。" +
                                     "请只输出一个 JSON 对象，不要有其他文字或代码块标记。"
+                                includeStructuredParams = true
                             } else {
                                 return TextAnalysisResult.Failure(
                                     AiFailure.InvalidResponse(
@@ -75,7 +80,10 @@ class OpenAICompatibleTextProvider(
                 }
 
                 is ChatOutcome.HttpError -> {
-                    if (includeStructuredParams && outcome.unsupportedParams) {
+                    // 同视觉通道：服务端不认这个参数时，要确认还有下一轮才关掉重试
+                    if (includeStructuredParams && outcome.unsupportedParams &&
+                        attempt < MAX_ATTEMPTS - 1
+                    ) {
                         includeStructuredParams = false
                     } else {
                         return TextAnalysisResult.Failure(outcome.failure)
@@ -138,6 +146,7 @@ class OpenAICompatibleTextProvider(
             category = request.category,
             confidence = request.confidence,
             evidence = request.evidence,
+            placeHint = request.place,
         )
 
         val body = JSONObject().apply {
@@ -168,8 +177,11 @@ class OpenAICompatibleTextProvider(
     }
 
     private companion object {
-        /** 首次 + 一次重试 */
-        private const val MAX_ATTEMPTS = 2
+        /**
+         * 最多几次请求。同视觉通道：为「解析失败 → 打开 response_format →
+         * 被服务端拒」留出第三次的机会。常见路径只有 1 次。
+         */
+        private const val MAX_ATTEMPTS = 3
 
         /** 七个字段各 1–3 句，1500 tokens 有充足余量 */
         private const val MAX_OUTPUT_TOKENS = 1500

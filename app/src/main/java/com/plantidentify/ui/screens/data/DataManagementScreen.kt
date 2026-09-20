@@ -71,6 +71,7 @@ fun DataManagementScreen(
     val pendingRestore by viewModel.pendingRestore.collectAsStateWithLifecycle()
     val backups by viewModel.backups.collectAsStateWithLifecycle()
     val locationEnabled by viewModel.locationEnabled.collectAsStateWithLifecycle()
+    val locationShareWithAi by viewModel.locationShareWithAi.collectAsStateWithLifecycle()
 
     val snackbarHostState = remember { SnackbarHostState() }
     // 打开开关后给用户的明确交代。用枚举而不是布尔值：
@@ -79,8 +80,17 @@ fun DataManagementScreen(
     var locationHint by remember { mutableStateOf<LocationHint?>(null) }
 
     val locationPermissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission(),
-    ) { granted ->
+        // 同时申请「精确」与「大致」两档。
+        //
+        // 只要 COARSE 的话，反查出的地点永远停在「XX区」——
+        // 网络定位的误差常在几百米到一两公里，只能落到区级。
+        // 想要「某路 / 某号 / 某小区」这一级就必须有 FINE 走 GPS。
+        //
+        // 用户在权限框里选「大致位置」也完全没问题：那时只授予 COARSE，
+        // LocationProvider 会自动退回网络定位，只是精度差一档。
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) { grants ->
+        val granted = grants.values.any { it }
         locationHint = if (granted) LocationHint.GRANTED else LocationHint.DENIED
     }
 
@@ -132,6 +142,8 @@ fun DataManagementScreen(
         ) {
             LocationCard(
                 enabled = locationEnabled,
+                shareWithAi = locationShareWithAi,
+                onToggleShare = viewModel::setShareLocationWithAi,
                 onToggle = { checked ->
                     viewModel.setLocationEnabled(checked)
                     if (!checked) {
@@ -143,7 +155,10 @@ fun DataManagementScreen(
                         // 既然用户此刻正在做这个决定，就顺手把权限问了 ——
                         // 拖到别处再问，用户根本不知道还有一步没做
                         locationPermissionLauncher.launch(
-                            Manifest.permission.ACCESS_COARSE_LOCATION,
+                            arrayOf(
+                                Manifest.permission.ACCESS_COARSE_LOCATION,
+                                Manifest.permission.ACCESS_FINE_LOCATION,
+                            ),
                         )
                     }
                 },
@@ -264,12 +279,15 @@ private enum class LocationHint(val title: String, val body: String) {
     ALREADY(
         title = "已开启地点记录",
         body = "定位权限也已就绪。保存植物档案时会一并记下拍摄地点，" +
-            "地点只存在本机，不会上传。",
+            "地点只存在本机。\n\n" +
+            "若还想让它参与识别判断，可另外开启下方的「用地点辅助识别」——" +
+            "那一步才会把地点发给 AI 服务。",
     ),
     GRANTED(
         title = "已开启并获得定位权限",
-        body = "之后保存植物档案时会一并记下拍摄地点。" +
-            "地点只存在本机，不会上传。",
+        body = "之后保存植物档案时会一并记下拍摄地点，地点只存在本机。\n\n" +
+            "若还想让它参与识别判断，可另外开启下方的「用地点辅助识别」——" +
+            "那一步才会把地点发给 AI 服务。",
     ),
     DENIED(
         title = "缺少定位权限",
@@ -281,8 +299,24 @@ private enum class LocationHint(val title: String, val body: String) {
     ),
 }
 
+/**
+ * 位置设置卡。
+ *
+ * 两个开关而不是一个，是因为它们管的是**两件隐私含义完全不同**的事：
+ *  - 「记录观察地点」= 在本机记下一个坐标，数据不出设备
+ *  - 「用地点辅助识别」= 把坐标随识别请求发给第三方 AI 服务
+ *
+ * 合成一个开关就等于「想记地点就必须同意上传」，那是不合理的捆绑。
+ * 后者默认关闭，且只在已经开启前者时才显示 —— 没在记地点就没有地点可发，
+ * 摆一个无效开关只会让人困惑。
+ */
 @Composable
-private fun LocationCard(enabled: Boolean, onToggle: (Boolean) -> Unit) {
+private fun LocationCard(
+    enabled: Boolean,
+    shareWithAi: Boolean,
+    onToggle: (Boolean) -> Unit,
+    onToggleShare: (Boolean) -> Unit,
+) {
     SectionCard(title = "位置") {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -291,12 +325,40 @@ private fun LocationCard(enabled: Boolean, onToggle: (Boolean) -> Unit) {
             Column(modifier = Modifier.weight(1f)) {
                 Text("记录观察地点", style = MaterialTheme.typography.bodyMedium)
                 Text(
-                    text = "保存档案时一并记下拍摄地点。地点只存在本机，不会上传。",
+                    text = "保存档案时一并记下拍摄地点。" +
+                        if (shareWithAi && enabled) {
+                            "地点会随识别请求发送给你配置的 AI 服务作为参考。"
+                        } else {
+                            "地点只存在本机，不会上传。"
+                        },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             Switch(checked = enabled, onCheckedChange = onToggle)
+        }
+
+        if (enabled) {
+            Spacer(Modifier.height(14.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("用地点辅助识别", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        // 注意：Compose 的 Text **不渲染 markdown**，
+                        // 写 **参考** 会在屏幕上原样显示星号（Phase6+ 踩过这个坑）
+                        text = "把拍摄地点作为参考线索发给 AI 服务，" +
+                            "帮助它优先考虑该地区常见的物种。\n\n" +
+                            "开启后你的行踪信息会交给该服务商 —— 默认关闭，请自行权衡。\n" +
+                            "关闭与否都不影响识别本身，只是少一条参考线索。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(checked = shareWithAi, onCheckedChange = onToggleShare)
+            }
         }
     }
 }

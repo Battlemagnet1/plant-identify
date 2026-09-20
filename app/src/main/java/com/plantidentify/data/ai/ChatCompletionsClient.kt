@@ -295,8 +295,17 @@ class ChatCompletionsClient(
         fun defaultClient(): OkHttpClient = OkHttpClient.Builder()
             .connectTimeout(20, TimeUnit.SECONDS)
             .writeTimeout(60, TimeUnit.SECONDS)
-            .readTimeout(180, TimeUnit.SECONDS)
-            .callTimeout(240, TimeUnit.SECONDS)
+            // 读取 120s / 整体 150s。
+            //
+            // 原来给的是 180s / 240s，注释写「多图联合推理较慢，超时给足」——
+            // 但给足的另一面是**病态挂起**：真出问题时用户要等满 4 分钟才看到
+            // 「请求超时」，而这段时间里界面毫无反馈。
+            //
+            // 120s 已经不是紧的：5 张 1536px 图在 4G 下估算 10s 上下，
+            // 除非服务端本身排队严重，否则用不到这个量级。
+            // 收紧之后的实测数据由 TimingTrace 记录，若真的不够再放宽。
+            .readTimeout(120, TimeUnit.SECONDS)
+            .callTimeout(150, TimeUnit.SECONDS)
             .retryOnConnectionFailure(true)
             .build()
     }

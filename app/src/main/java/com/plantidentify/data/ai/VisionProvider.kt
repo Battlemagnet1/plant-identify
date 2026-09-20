@@ -20,6 +20,14 @@ data class VisionRequest(
     val images: List<VisionImage>,
     val config: AiEndpointConfig,
     val strategy: PromptStrategy = PromptStrategy.DEFAULT,
+    /**
+     * 拍摄地点，作为**弱先验**提示给模型。
+     *
+     * 为 null 表示不给（用户关了「用地点辅助识别」开关，或没取到地点）——
+     * 此时 prompt 里连这一节都不会出现，这是刻意的：
+     * 与其写「地点：未知」，不如完全不提，免得模型自己脑补一个环境。
+     */
+    val place: String? = null,
 )
 
 /** 一次测试连接请求 */

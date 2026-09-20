@@ -145,7 +145,7 @@ fun PlantEditScreen(
             EditField(
                 value = form.name,
                 onValueChange = { value -> viewModel.update { copy(name = value) } },
-                label = "中文名称（必填）",
+                label = "正式中文名称（必填）",
                 singleLine = true,
             )
 

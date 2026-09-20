@@ -66,20 +66,17 @@ fun HomeScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    Column {
-                        Text(
-                            // 用资源而不是硬编码：名称只有一个来源，
-                            // 否则改一次名字就会漏掉一处
-                            text = stringResource(R.string.app_name),
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Medium,
-                        )
-                        Text(
-                            text = "v${BuildConfig.VERSION_NAME}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
+                    Text(
+                        // 用资源而不是硬编码：名称只有一个来源，
+                        // 否则改一次名字就会漏掉一处。
+                        //
+                        // 这里读的是 app_title 而不是 app_name —— 后者在完整版里
+                        // 带「（完整版）」后缀，在 titleLarge 下会折成两行。
+                        // 完整版身份由桌面图标表达即可，顶栏保持单行。
+                        text = stringResource(R.string.app_title),
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Medium,
+                    )
                 },
                 actions = {
                     TextButton(onClick = onSettings) { Text("设置") }

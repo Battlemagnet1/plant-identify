@@ -4,13 +4,11 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
+import android.util.Log
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.plantidentify.data.ai.AiFailure
 import com.plantidentify.data.ai.AiSettingsStore
-import com.plantidentify.data.ai.TextAnalysisRequest
-import com.plantidentify.data.ai.TextAnalysisResult
 import com.plantidentify.data.ai.RecognitionResult
-import com.plantidentify.data.ai.TextProvider
 import com.plantidentify.data.ai.VisionCallResult
 import com.plantidentify.data.ai.VisionImage
 import com.plantidentify.data.ai.VisionProvider
@@ -18,10 +16,14 @@ import com.plantidentify.data.ai.VisionRequest
 import com.plantidentify.data.ai.VisionResponse
 import com.plantidentify.data.draft.CaptureDraftStore
 import com.plantidentify.data.image.ImageCompressor
-import com.plantidentify.data.local.entity.AnalysisStatus
+import com.plantidentify.data.location.LocationSettingsStore
+import com.plantidentify.data.location.aiPlaceHint
+import com.plantidentify.data.recognition.AnalysisRunner
 import com.plantidentify.data.repository.PlantRepository
 import com.plantidentify.data.storage.ImageStore
 import com.plantidentify.domain.model.MergeSuggestion
+import com.plantidentify.domain.model.TimingTrace
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -58,16 +60,44 @@ class RecognitionViewModel(
     private val imageStore: ImageStore,
     private val imageCompressor: ImageCompressor,
     private val aiSettingsStore: AiSettingsStore,
+    private val locationSettingsStore: LocationSettingsStore,
     private val visionProvider: VisionProvider,
-    private val textProvider: TextProvider,
     private val repository: PlantRepository,
+    private val analysisRunner: AnalysisRunner,
+    /**
+     * 应用级作用域，**不是** `viewModelScope`。
+     *
+     * 保存成功后会 `navigate(plantDetail) { popUpTo(RECOGNITION) { inclusive = true } }` ——
+     * 本 ViewModel 随即被销毁，`viewModelScope` 里的协程会被取消。
+     * 而文字分析正是在保存之后启动的：用 `viewModelScope` 会让分析
+     * 在导航那一瞬间静默中止，用户永远等不到百科。
+     */
+    private val externalScope: CoroutineScope,
 ) : ViewModel() {
+
+    /**
+     * 本次识别的**地点弱先验**，在 [recognize] 里算一次、保存阶段复用。
+     *
+     * 为什么不每次现读草稿：保存成功后草稿会被清掉，
+     * 而文字分析发生在保存之后 —— 那时再读草稿只会得到空值，
+     * 于是视觉请求带了地点、百科请求却没带，同一株植物的两次请求口径不一致。
+     */
+    private var placeHint: String? = null
 
     private val _state = MutableStateFlow<RecognitionUiState>(RecognitionUiState.Idle)
     val state: StateFlow<RecognitionUiState> = _state.asStateFlow()
 
     private val _saveState = MutableStateFlow<SaveState>(SaveState.NotSaved)
     val saveState: StateFlow<SaveState> = _saveState.asStateFlow()
+
+    /**
+     * 本次识别各阶段的耗时，给界面上的「本次耗时」卡用。
+     *
+     * 存在的意义是让「慢在哪」可见 —— 在它出现之前，
+     * 「识别要两三分钟」这个说法无法拆开，只能靠猜。
+     */
+    private val _timing = MutableStateFlow<List<TimingTrace.Segment>>(emptyList())
+    val timing: StateFlow<List<TimingTrace.Segment>> = _timing.asStateFlow()
 
     init {
         // 进入页面即自动开始识别：用户从「添加植物」点「开始识别」过来时，
@@ -78,9 +108,13 @@ class RecognitionViewModel(
     /** 重新识别（用户改完配置或补充照片后回来） */
     fun recognize() {
         _saveState.value = SaveState.NotSaved
+        _timing.value = emptyList()
 
         viewModelScope.launch {
             _state.value = RecognitionUiState.Preparing
+
+            // 计时从「开始准备」算起，这样压缩那一段才是真的压缩耗时
+            val trace = TimingTrace()
 
             val draft = draftStore.current()
             if (draft.isEmpty) {
@@ -120,30 +154,51 @@ class RecognitionViewModel(
                 return@launch
             }
 
+            trace.mark("压缩图片")
+            _timing.value = trace.segments()
+
             _state.value = RecognitionUiState.Recognizing(
                 imageCount = images.size,
                 usedFallbackForSomeImages = images.size < draft.count,
             )
 
-            _state.value = when (
-                val result = visionProvider.recognize(
-                    VisionRequest(
-                        images = images,
-                        config = config.vision,
-                        strategy = config.promptStrategy,
-                    ),
+            // 地点弱先验。只有用户在设置里**明确允许上传**时才有值 ——
+            // 默认关闭，且「关」意味着 prompt 里连这一节都不出现。
+            // 在这里算一次并记住，保存阶段的文字分析复用同一个值。
+            placeHint = locationSettingsStore.current().let { choice ->
+                aiPlaceHint(
+                    shareWithAi = choice.shareWithAi,
+                    locationName = draft.locationName,
+                    latitude = draft.latitude,
+                    longitude = draft.longitude,
                 )
-            ) {
-                is VisionCallResult.Success -> RecognitionUiState.Success(result.response)
+            }
+
+            // 先取出结果、记下这一段耗时，再决定状态 ——
+            // 顺序反过来的话，失败分支会漏掉这次计时
+            val vision = visionProvider.recognize(
+                VisionRequest(
+                    images = images,
+                    config = config.vision,
+                    strategy = config.promptStrategy,
+                    place = placeHint,
+                ),
+            )
+            trace.mark("识别请求")
+            _timing.value = trace.segments()
+            Log.i(TimingTrace.LOG_TAG, "本次识别 ${trace.render()}")
+
+            _state.value = when (vision) {
+                is VisionCallResult.Success -> RecognitionUiState.Success(vision.response)
                 is VisionCallResult.Failure -> RecognitionUiState.Failed(
-                    result.failure,
+                    vision.failure,
                     // 配置类错误直接引导去设置页；其他错误留在本页重试更顺手
-                    canOpenSettings = result.failure is AiFailure.NotConfigured ||
-                        result.failure is AiFailure.Unauthorized ||
-                        result.failure is AiFailure.ModelNotFound ||
-                        result.failure is AiFailure.ModelNotVisionCapable ||
-                        result.failure is AiFailure.EndpointNotFound ||
-                        result.failure is AiFailure.CleartextBlocked,
+                    canOpenSettings = vision.failure is AiFailure.NotConfigured ||
+                        vision.failure is AiFailure.Unauthorized ||
+                        vision.failure is AiFailure.ModelNotFound ||
+                        vision.failure is AiFailure.ModelNotVisionCapable ||
+                        vision.failure is AiFailure.EndpointNotFound ||
+                        vision.failure is AiFailure.CleartextBlocked,
                 )
             }
         }
@@ -173,6 +228,9 @@ class RecognitionViewModel(
 
         when (_saveState.value) {
             SaveState.Saving,
+            // 已落库但百科还在后台跑 —— 这也是「已经保存过了」，
+            // 漏掉它就会让一次连点产生第二个档案
+            is SaveState.SavedAnalysisPending,
             is SaveState.SavedWithAnalysis,
             is SaveState.SavedWithoutAnalysis,
             is SaveState.AwaitingMergeDecision,
@@ -251,7 +309,19 @@ class RecognitionViewModel(
         }
     }
 
-    /** 基础结果落库 + 文字分析（两条分支共用） */
+    /**
+     * 基础结果落库，然后**立刻返回**，把文字分析丢到后台。
+     *
+     * ## 为什么不再等分析跑完
+     *
+     * 原先这里保存完直接 `runAnalysis(...)`，界面停在 `SaveState.Saving`
+     * （文案是「正在保存（可能包含文字分析，耗时较长）」）——
+     * 用户感知到的「保存好慢」就是这一次串行的网络请求。
+     *
+     * 而它其实不必在这儿等：档案在落库那一瞬间就已经完整了 ——
+     * 可查、可搜、可导出。百科描述是**锦上添花**，
+     * 晚几秒到、甚至失败，都不影响档案的可用性（规格书第三十节也是这么要求的）。
+     */
     private suspend fun saveAsNewPlant(
         current: RecognitionUiState.Success,
         result: RecognitionResult,
@@ -264,8 +334,26 @@ class RecognitionViewModel(
                 return
             }
 
-        // ---- 第二步：文字分析。失败只影响描述内容，不影响档案
-        runAnalysis(plantId, result.name, current)
+        // ---- 第二步：立刻结束本页流程。用户可以马上离开去看档案
+        _saveState.value = SaveState.SavedAnalysisPending(plantId)
+
+        // ---- 第三步：分析交给应用级作用域。
+        //
+        // 用 externalScope 而不是 viewModelScope 是**必须的**：
+        // 界面收到 SavedAnalysisPending 后会 navigate(plantDetail) 并把本页
+        // 从回退栈移除，本 ViewModel 随即销毁 —— viewModelScope 里的协程
+        // 会在那一刻被取消，百科永远生成不出来，而且不会有任何报错。
+        externalScope.launch {
+            val outcome = analysisRunner.run(
+                plantId = plantId,
+                result = result,
+                plantName = result.name,
+                place = placeHint,
+            )
+            // 此时页面多半已经不在，这个赋值没人看 —— 保留它只是为了
+            // 「用户一直停在识别页」这种情形下状态仍然是对的
+            applyAnalysisOutcome(plantId, outcome)
+        }
     }
 
     /**
@@ -283,78 +371,26 @@ class RecognitionViewModel(
 
         viewModelScope.launch {
             _saveState.value = SaveState.Saving
-            runAnalysis(plantId, current.response.result?.name.orEmpty(), current)
+            val outcome = analysisRunner.run(
+                plantId = plantId,
+                result = current.response.result,
+                place = placeHint,
+            )
+            applyAnalysisOutcome(plantId, outcome)
         }
     }
 
-    /**
-     * 执行文字分析并回填档案。
-     *
-     * 方法与 [saveCurrentResult] 分开，是为了让「已保存但分析失败 → 重新生成」
-     * 这条路径能复用同一段逻辑，而不是复制一遍。
-     */
-    private suspend fun runAnalysis(
-        plantId: Long,
-        plantName: String,
-        recognition: RecognitionUiState.Success,
-    ) {
-        val config = aiSettingsStore.current().effectiveText
+    /** 把分析结果映射成界面状态。三条分支的文案差异在 [AnalysisRunner.Outcome] 里已备好 */
+    private fun applyAnalysisOutcome(plantId: Long, outcome: AnalysisRunner.Outcome) {
+        _saveState.value = when (outcome) {
+            is AnalysisRunner.Outcome.Succeeded ->
+                SaveState.SavedWithAnalysis(plantId = plantId, partialNote = outcome.partialNote)
 
-        // 没配文字模型不算错误 —— 用户可能只想用视觉识别。
-        // 但要区分「完全没配」与「配了一半」，否则用户看到「尚未配置」
-        // 会以为自己没动过设置。
-        if (!config.isUsable) {
-            repository.updateAnalysis(plantId, AnalysisStatus.NOT_REQUESTED)
+            is AnalysisRunner.Outcome.NotConfigured ->
+                SaveState.SavedWithoutAnalysis(plantId = plantId, reason = outcome.reason)
 
-            val nothingConfigured = config.baseUrl.isBlank() && config.model.isBlank() && config.apiKey.isBlank()
-            _saveState.value = SaveState.SavedWithoutAnalysis(
-                plantId = plantId,
-                reason = if (nothingConfigured) {
-                    "尚未配置文字分析模型，植物百科未能生成"
-                } else {
-                    "文字分析配置不完整（缺 ${config.missingFields.joinToString("、")}）" +
-                        "，植物百科未能生成"
-                },
-            )
-            return
-        }
-
-        repository.markAnalysisPending(plantId)
-
-        val result = recognition.response.result
-        val analysis = textProvider.generateAnalysis(
-            TextAnalysisRequest(
-                name = plantName,
-                latinName = result?.latinName,
-                family = result?.family,
-                genus = result?.genus,
-                category = result?.category,
-                confidence = result?.confidence ?: 0.0,
-                evidence = result?.evidence.orEmpty(),
-                config = config,
-            ),
-        )
-
-        when (analysis) {
-            is TextAnalysisResult.Success -> {
-                repository.updateAnalysis(
-                    plantId = plantId,
-                    status = AnalysisStatus.SUCCEEDED,
-                    analysis = analysis.analysis,
-                )
-                _saveState.value = SaveState.SavedWithAnalysis(
-                    plantId = plantId,
-                    partialNote = analysis.parseNote,
-                )
-            }
-
-            is TextAnalysisResult.Failure -> {
-                repository.updateAnalysis(plantId, AnalysisStatus.FAILED)
-                _saveState.value = SaveState.SavedWithoutAnalysis(
-                    plantId = plantId,
-                    reason = analysis.failure.userMessage,
-                )
-            }
+            is AnalysisRunner.Outcome.Failed ->
+                SaveState.SavedWithoutAnalysis(plantId = plantId, reason = outcome.reason)
         }
     }
 
@@ -364,9 +400,11 @@ class RecognitionViewModel(
             imageStore: ImageStore,
             imageCompressor: ImageCompressor,
             aiSettingsStore: AiSettingsStore,
+            locationSettingsStore: LocationSettingsStore,
             visionProvider: VisionProvider,
-            textProvider: TextProvider,
             repository: PlantRepository,
+            analysisRunner: AnalysisRunner,
+            externalScope: CoroutineScope,
         ): ViewModelProvider.Factory = viewModelFactory {
             initializer {
                 RecognitionViewModel(
@@ -374,9 +412,11 @@ class RecognitionViewModel(
                     imageStore = imageStore,
                     imageCompressor = imageCompressor,
                     aiSettingsStore = aiSettingsStore,
+                    locationSettingsStore = locationSettingsStore,
                     visionProvider = visionProvider,
-                    textProvider = textProvider,
                     repository = repository,
+                    analysisRunner = analysisRunner,
+                    externalScope = externalScope,
                 )
             }
         }
@@ -430,8 +470,22 @@ sealed interface SaveState {
      */
     data class AwaitingMergeDecision(val suggestion: MergeSuggestion) : SaveState
 
-    /** 正在保存（可能包含文字分析，耗时较长） */
+    /** 正在保存（落库） */
     data object Saving : SaveState
+
+    /**
+     * **已落库**，植物百科正在后台生成。
+     *
+     * 与 [SavedWithAnalysis] 的区别只有一件事：分析还没跑完。
+     * 但它值得单独一个状态，因为它代表**流程已经结束** ——
+     * 用户可以立刻离开这一页，档案已经在了。
+     *
+     * 原先保存要等文字分析跑完才返回（界面上写着「正在保存（可能包含文字分析，
+     * 耗时较长）」），用户感知到的「保存好慢」就是这么来的。
+     * 而分析其实完全可以晚一步做：它的产物是百科描述，
+     * 缺了它档案依然完整可查、可搜索、可导出。
+     */
+    data class SavedAnalysisPending(val plantId: Long) : SaveState
 
     /** 已保存，且文字分析成功 */
     data class SavedWithAnalysis(

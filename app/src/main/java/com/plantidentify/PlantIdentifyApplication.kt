@@ -16,6 +16,7 @@ import com.plantidentify.data.export.ReportThumbnailer
 import com.plantidentify.data.image.ImageCompressor
 import com.plantidentify.data.local.Migrations
 import com.plantidentify.data.local.PlantIdentifyDatabase
+import com.plantidentify.data.recognition.AnalysisRunner
 import com.plantidentify.data.location.LocationProvider
 import com.plantidentify.data.location.LocationSettingsStore
 import com.plantidentify.data.repository.PlantRepository
@@ -157,6 +158,21 @@ class AppContainer(context: Context) {
     }
 
     /**
+     * 植物百科（文字分析）的执行体。
+     *
+     * 抽出来是为了让「识别页保存后异步跑」与「详情页重新生成」
+     * 走同一条实现，Phase 2 的任务队列也能直接复用 ——
+     * 不会出现「前台一套、后台一套」的分叉。
+     */
+    val analysisRunner: AnalysisRunner by lazy {
+        AnalysisRunner(
+            aiSettingsStore = aiSettingsStore,
+            textProvider = textProvider,
+            repository = plantRepository,
+        )
+    }
+
+    /**
      * 与进程同生命周期的协程作用域。
      *
      * 用于「必须执行完、不能因为界面被关闭而取消」的收尾工作。
@@ -164,7 +180,10 @@ class AppContainer(context: Context) {
      * ViewModel 作用域上，会随导航条目一起被取消 —— 结果是留下一堆
      * 无人引用的孤儿图片，或者更糟的半删除状态。
      *
-     * 触达文件系统的写操作走这里，读操作与 UI 状态仍走各自的作用域。
+     * **植物百科也走这里**：保存成功后识别页会被 popUpTo 移除，
+     * 挂 viewModelScope 会让分析在导航那一瞬间被静默取消。
+     *
+     * 触达文件系统与网络的写操作走这里，读操作与 UI 状态仍走各自的作用域。
      */
     val applicationScope: CoroutineScope =
         CoroutineScope(SupervisorJob() + Dispatchers.IO)

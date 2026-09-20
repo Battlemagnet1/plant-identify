@@ -28,3 +28,28 @@ fun placeText(locationName: String?, latitude: Double?, longitude: Double?): Str
     if (latitude == null || longitude == null) return null
     return "%.4f, %.4f".format(latitude, longitude)
 }
+
+/**
+ * 作为「弱先验」传给 AI 的地点文本。用户没允许上传时返回 null。
+ *
+ * ## 为什么要单独一个函数而不是各处自己判断
+ *
+ * 「允不允许上传地点」这个开关必须在**每一个**构造 AI 请求的地方生效。
+ * 散着写的话，新加一条调用链时极容易漏 —— 而漏掉的后果是**在用户明确
+ * 关掉开关的情况下把行踪发了出去**。那不只是 bug，是隐私事故。
+ *
+ * 收敛成一个函数后，只要它拿不到「已允许」就必然返回 null，
+ * 而 prompt 侧对 null 的处理是**整节不输出**（见 `PromptBuilder.placeSection`），
+ * 不会出现「地点：未知」这种暗示。
+ *
+ * @param shareWithAi 来自 [LocationChoice.shareWithAi]，默认 false
+ */
+fun aiPlaceHint(
+    shareWithAi: Boolean,
+    locationName: String?,
+    latitude: Double?,
+    longitude: Double?,
+): String? {
+    if (!shareWithAi) return null
+    return placeText(locationName, latitude, longitude)
+}

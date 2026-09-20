@@ -19,6 +19,18 @@ data class LocationChoice(
     val asked: Boolean = false,
     /** 用户是否同意记录地点 */
     val enabled: Boolean = false,
+    /**
+     * 是否允许把地点**随识别请求发给 AI 服务**作为辅助线索。
+     *
+     * 默认 `false`，且与 [enabled] 是**两件事**：
+     *  - `enabled` 管的是「要不要在本机记下地点」，地点不出设备
+     *  - `shareWithAi` 管的是「要不要把这个地点发出去」
+     *
+     * 分开是刻意的。合在一起就等于「想记地点就必须同意上传」，
+     * 而这两件事的隐私含义差得很远 —— 前者只是本地存个字符串，
+     * 后者是把用户的行踪交给第三方服务。
+     */
+    val shareWithAi: Boolean = false,
 )
 
 /**
@@ -41,6 +53,7 @@ class LocationSettingsStore(private val context: Context) {
         LocationChoice(
             asked = prefs[KEY_ASKED] ?: false,
             enabled = prefs[KEY_ENABLED] ?: false,
+            shareWithAi = prefs[KEY_SHARE_WITH_AI] ?: false,
         )
     }
 
@@ -51,7 +64,22 @@ class LocationSettingsStore(private val context: Context) {
         context.locationDataStore.edit { prefs ->
             prefs[KEY_ENABLED] = enabled
             prefs[KEY_ASKED] = true
+            // 关掉地点记录时，顺手把「允许上传」也关掉 ——
+            // 否则会留下一个「不上传任何地点，但已授权上传」的矛盾状态，
+            // 用户下次打开开关时会莫名其妙地把行踪发出去
+            if (!enabled) prefs[KEY_SHARE_WITH_AI] = false
         }
+    }
+
+    /**
+     * 设置「允许把地点发给 AI」。
+     *
+     * 只在 [LocationChoice.enabled] 为真时有意义 —— 没在记地点就没有地点可发。
+     * 这里不做强制校验（避免把状态搞成不可达的角落），由界面只在开关打开时
+     * 才显示这一项。
+     */
+    suspend fun setShareWithAi(share: Boolean) {
+        context.locationDataStore.edit { prefs -> prefs[KEY_SHARE_WITH_AI] = share }
     }
 
     /** 只记「问过了」，不改开关状态（用户点「暂不允许」时用） */
@@ -62,5 +90,6 @@ class LocationSettingsStore(private val context: Context) {
     private companion object {
         val KEY_ASKED = booleanPreferencesKey("location_prompt_asked")
         val KEY_ENABLED = booleanPreferencesKey("location_enabled")
+        val KEY_SHARE_WITH_AI = booleanPreferencesKey("share_location_with_ai")
     }
 }

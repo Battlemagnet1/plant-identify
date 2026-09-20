@@ -1213,7 +1213,7 @@ if open_data_management():
 
             # 植物名与字段标签要真的出现，否则可能是一份空报告
             check("含植物名称与关键字段",
-                  "紫薇" in html and all(k in html for k in ("中文名称", "拉丁学名", "AI识别置信度")))
+                  "紫薇" in html and all(k in html for k in ("正式中文名称", "拉丁学名", "AI识别置信度")))
             shot("p6-export-result")
         else:
             check("拉回本机", False, "pull 失败")

@@ -81,11 +81,13 @@ object PromptBuilder {
      * @param roles 按发送顺序排列的每张图的部位标注
      * @param strategy 策略变体（见 [PromptStrategy]）
      * @param correction 重试时传入的纠正说明；首次请求为 null
+     * @param placeHint 拍摄地点，作为弱先验；为 null 时 prompt 不提这一节
      */
     fun buildRecognitionPrompt(
         roles: List<ImageRole>,
         strategy: PromptStrategy = PromptStrategy.DEFAULT,
         correction: String? = null,
+        placeHint: String? = null,
     ): String {
         val imageCount = roles.size
         return buildString {
@@ -107,7 +109,21 @@ object PromptBuilder {
             appendLine()
             appendLine()
 
+            // 地点放在判定规则之后、输出格式之前。
+            // 放在最前面的风险是它会先入为主地框住模型对图片的判断 ——
+            // 而它本来就只是个参考。
+            placeSection(placeHint)?.let { section ->
+                appendLine(section)
+                appendLine()
+            }
+
             appendLine(JSON_SCHEMA_SPEC.trimIndent())
+            appendLine()
+            appendLine()
+
+            // 单独再讲一遍 name 该怎么写。只靠 schema 里的字段说明不够 ——
+            // 模型把那一整段当「格式要求」扫过去，仍会顺手写下俗称。
+            appendLine(NAME_CONSISTENCY_RULE.trimIndent())
             appendLine()
 
             append(CONFIDENCE_GUIDE.trimIndent())
@@ -165,6 +181,7 @@ object PromptBuilder {
         category: String?,
         confidence: Double,
         evidence: List<String>,
+        placeHint: String? = null,
     ): String {
         val facts = buildList {
             add("- 中文名：$name")
@@ -188,6 +205,15 @@ object PromptBuilder {
             appendLine(ANALYSIS_SCHEMA_SPEC.trimIndent())
             appendLine()
             appendLine(ANALYSIS_CONTENT_RULES.trimIndent())
+
+            // 百科同样可以受益于地点：同一物种在南北方的花期、越冬表现差很多。
+            // 但仍按弱先验处理 —— 不能因为「种在杭州」就把花期写成江浙的，
+            // 用户可能只是在杭州拍到了引种栽培的植株。
+            placeSection(placeHint)?.let { section ->
+                appendLine()
+                appendLine()
+                append(section)
+            }
 
             if (confidence < LOW_CONFIDENCE_FOR_ANALYSIS) {
                 appendLine()
@@ -249,6 +275,9 @@ object PromptBuilder {
         5. **common_names 只写真正在用的俗称**
            写民间口耳相传的叫法（如紫薇的「痒痒树」）。**不要**把
            中文名的缩写、拉丁名的音译、或你自己起的名字写进去。
+           **也不要把这株植物的正式中文名本身再写一遍** ——
+           那一栏是给「俗称」用的，重复一遍正式名只会让界面显示成
+           「紫薇、紫薇」，用户会以为程序出了问题。
            想不出俗称就填空字符串 —— 编一个不存在的别名会直接误导用户。
 
         6. **pest_control 要具体到「怎么处理」**
@@ -267,6 +296,41 @@ object PromptBuilder {
 
         宁可写得笼统一些，也不要基于一个可能错误的物种名展开细节。
     """.trimIndent()
+
+    /**
+     * 拍摄地点提示（**弱先验**）。
+     *
+     * ## 为什么措辞这么啰嗦
+     *
+     * 「告诉模型地点」这件事本身有风险：模型很擅长把一条弱线索当成结论。
+     * 一旦它把「拍摄地在杭州」理解成「这里只可能是杭州的树种」，
+     * 识别就被地点绑死了 —— 而用户拍到的完全可能是一株引种栽培、
+     * 甚至养在室内的植物。
+     *
+     * 所以这一段做四件事：
+     *  1. 明说它**只影响候选排序**，不是鉴定依据
+     *  2. 禁止因此提高 confidence（否则置信度就失去了筛选价值）
+     *  3. 禁止写进 evidence —— 依据栏里混进地点，事后就没法复核了
+     *  4. 明确冲突时**形态特征优先**
+     *
+     * 地点为空时返回 null：调用方据此**整节不输出**。
+     * 写「地点：未知」反而会让模型自己脑补一个环境。
+     */
+    private fun placeSection(place: String?): String? {
+        val value = place?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        return """
+            ## 拍摄地点（仅作参照，不是鉴定依据）
+
+            拍摄地：$value
+
+            这个地点**只用于调整候选的先后顺序**：该地区常见的物种可以优先考虑。
+
+            - **不要**把它当成鉴定结论，也不要因此提高 confidence
+            - **不要**把地点写进 evidence
+            - **不要**因为地点就排除某个物种 —— 引种栽培、室内养护都很常见
+            - 形态特征与地点提示冲突时，**一律以形态特征为准**
+        """.trimIndent()
+    }
 
     private fun roleSection(roles: List<ImageRole>): String = buildString {
         val labelled = roles.withIndex().filter { it.value != ImageRole.UNKNOWN }
@@ -318,7 +382,7 @@ object PromptBuilder {
         只输出一个 JSON 对象，不要有任何其他文字，也不要使用 ``` 代码块标记。
 
         {
-          "name": "中文名称",
+          "name": "正式中文名称",
           "latin_name": "拉丁学名",
           "family": "科",
           "genus": "属",
@@ -333,12 +397,58 @@ object PromptBuilder {
         }
 
         字段说明：
-        - name：必填。无法确定物种时，给出最可能的属或科并加「（疑似）」
+        - name：必填。**必须是植物学上的正式中文名称**（如「悬铃木」「紫薇」「木棉」）。
+          **不要**用商品名、园艺品种名、花市俗称或地方叫法
+          （「法国梧桐」「痒痒树」「英雄树」这类都不行）——
+          同一物种在不同记录里出现多个名字，会让档案搜索、去重与合并全部失效。
+          请始终使用《中国植物志》体系的正式中文名。
+          无法确定物种时，给出最可能的属或科并加「（疑似）」
         - latin_name / family / genus / category：不确定时填空字符串 ""
         - evidence：2–5 条，说明你是根据哪些形态特征得出结论的
         - missing_information：要提升准确度还需要看到哪些部位的照片
         - possible_alternatives：最多 3 条，按可能性从高到低排列
         - conflicts：没有冲突时填空数组 []
+    """.trimIndent()
+
+    /**
+     * name 字段的写法约束。
+     *
+     * ## 为什么单独拿出来强调
+     *
+     * 模型的强烈倾向是「用最常见的叫法」—— 而常见的往往是俗称。
+     * 悬铃木会被写成「法国梧桐」，紫薇会被写成「痒痒树」，木棉会被写成「英雄树」。
+     * 这在小程序里看起来更亲切，在**档案库**里却是灾难：
+     *
+     *  - 搜索「悬铃木」搜不到那株被记成「法国梧桐」的
+     *  - 去重时同一物种的两条记录名字完全不同，本地算法判不出来
+     *  - 归并提示也失效，用户会手动建出重复档案
+     *
+     * 只在 schema 的字段说明里写一句不够 —— 那里是「格式说明」，
+     * 模型会当成格式要求扫过去。这里用独立小节 + 具体例子再讲一遍，
+     * 并明确告知「俗称由别的通道提供」，避免它觉得不写俗称就丢了信息。
+     */
+    private val NAME_CONSISTENCY_RULE = """
+        ## 关于 name 的写法
+
+        同一物种必须始终给出**同一个**正式中文名。
+
+        如果你本能想到的是俗称或花市叫法，请换回它的正式中文名：
+
+        | 你想到的 | 请改写成 |
+        |---|---|
+        | 法国梧桐 | 悬铃木 |
+        | 痒痒树 | 紫薇 |
+        | 英雄树 | 木棉 |
+        | 摇钱树 | 青桐 / 复羽叶栾树（按形态判断） |
+
+        以下都不算正式中文名，不要写进 name：
+        - 商品名、园艺品种名（如「紫叶李」「红枫」这类栽培品种叫法）
+        - 地方叫法、方言名
+        - 拉丁名的音译
+        - 你自己造的名字
+
+        俗称不需要你输出 —— 后续的百科通道会单独给出。
+        这里只负责「这株植物的正式中文名是什么」。
     """.trimIndent()
 
     private val CONFIDENCE_GUIDE = """

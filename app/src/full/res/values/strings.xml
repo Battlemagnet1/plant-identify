@@ -2,12 +2,17 @@
 <!--
   full 版本的显示名覆盖。
 
-  这是一个**覆盖源集**：只有 app_name 一个字符串，其余资源仍从 main 里取。
+  这是一个**覆盖源集**：只覆盖 app_name 一个字符串，其余资源仍从 main 里取。
   flavor 源集的优先级高于 main，所以同名的 app_name 以这里为准。
 
   为什么不用 resValue：那会在生成的 res 目录里再造一份 app_name，
   与 main 里那份同名资源的胜负取决于合并顺序，而覆盖源集是明确的、
   由 Android 资源合并规则保证的行为。
+
+  **刻意不覆盖 app_title**（首页顶栏标题）：
+  顶栏要的是能一行放下的名字，而「哪个是完整版」这件事由 app_name
+  在桌面图标与系统应用列表里表达就够了。在顶栏再写一遍，
+  只会让标题在 titleLarge 下折行 —— 那正是这一版要修掉的问题。
 -->
 <resources>
     <string name="app_name">Plant Identify Library（完整版）</string>

@@ -1,5 +1,6 @@
 package com.plantidentify.ui.screens.recognition
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -43,7 +44,9 @@ import com.plantidentify.data.ai.RecognitionResult
 import com.plantidentify.data.ai.VisionResponse
 import com.plantidentify.domain.model.MergeLevel
 import com.plantidentify.domain.model.MergeSuggestion
+import com.plantidentify.domain.model.TimingTrace
 import com.plantidentify.ui.components.BackIconButton
+import java.util.Locale
 import kotlin.math.roundToInt
 
 /**
@@ -82,6 +85,7 @@ fun RecognitionScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val saveState by viewModel.saveState.collectAsStateWithLifecycle()
+    val timing by viewModel.timing.collectAsStateWithLifecycle()
 
     // 找到可能对应的已有植物时，先问用户再写入。
     // 用对话框而不是底部栏：这是一个需要明确选择的决策点，
@@ -210,6 +214,12 @@ fun RecognitionScreen(
                     item { RawTextCard(response) }
 
                     item { PipelineSummaryCard(response) }
+
+                    // 放在流程摘要之后：它同样是「这次是怎么跑出来的」，
+                    // 只是更偏诊断。折叠起来，不打扰正常使用
+                    if (timing.isNotEmpty()) {
+                        item { TimingCard(timing) }
+                    }
 
                     item {
                         Button(
@@ -591,6 +601,94 @@ private fun RawTextCard(response: VisionResponse) {
 }
 
 /** 本次识别用到了什么 —— 让「模型说不准」时可以回溯是哪一步的影响 */
+/**
+ * 「本次耗时」卡：把这一轮识别的时间拆开，摊给用户看。
+ *
+ * ## 为什么值得给用户看
+ *
+ * 用户反馈「说十几秒，实际要两三分钟」。在此之前应用里没有任何耗时信息，
+ * 用户能说的只有「慢」，我能做的只有猜 —— 而猜出来的优化方向经常是错的
+ * （例如去降图片分辨率，实际瓶颈却在随后的那次文字分析）。
+ *
+ * 把分段摊开之后，反馈就从「它很慢」变成「识别请求用了 96 秒」，
+ * 那是可以直接行动的信息。
+ *
+ * ## 默认折叠
+ *
+ * 它属于诊断信息，不是每次识别都要看的东西 —— 展开着会把
+ * 「保存到档案」这个真正的主操作挤到屏幕外。
+ */
+@Composable
+private fun TimingCard(segments: List<TimingTrace.Segment>) {
+    var expanded by remember { mutableStateOf(false) }
+    val total = segments.sumOf { it.millis }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { expanded = !expanded },
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "本次耗时 · 合计 ${formatMillis(total)}",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text = if (expanded) "收起" else "展开",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+
+            if (expanded) {
+                Spacer(Modifier.height(10.dp))
+                segments.forEach { segment ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 3.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text(
+                            text = segment.label,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            text = formatMillis(segment.millis),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    // 说清「百科不在这张表里」，否则用户会以为合计就是全部，
+                    // 而它其实是保存前那半程 —— 百科是保存之后在后台跑的
+                    text = "这里统计的是保存之前的部分。植物百科在保存之后于后台生成，" +
+                        "它的耗时不在这张表里。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+/** 毫秒转给人看：小于 1 秒给毫秒，否则给一位小数的秒。固定用 Locale.US 保证跨区域一致 */
+private fun formatMillis(millis: Long): String =
+    if (millis < 1_000L) "${millis}ms" else "%.1fs".format(Locale.US, millis / 1000.0)
+
 @Composable
 private fun PipelineSummaryCard(response: VisionResponse) {
     Card(
@@ -789,6 +887,30 @@ private fun SaveBar(
                     )
                     Text(
                         text = "没有新建观察 —— 观察次数保持不变。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Button(
+                        onClick = { onOpenPlantDetail(saveState.plantId) },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("查看植物档案")
+                    }
+                }
+
+                is SaveState.SavedAnalysisPending -> {
+                    Text(
+                        text = "已保存到植物档案",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    Text(
+                        // 说清「现在可以走了」—— 这是这次改动的全部意义。
+                        // 以前这里会一直停在「正在保存（可能包含文字分析，耗时较长）」，
+                        // 用户以为走不了，只能干等那一次网络请求
+                        text = "植物百科正在后台生成。现在就可以离开这一页去看档案，" +
+                            "生成完会自动出现；失败也不影响已保存的识别结果。",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

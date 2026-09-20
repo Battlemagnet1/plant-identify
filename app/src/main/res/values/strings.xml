@@ -1,6 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- 应用显示名。桌面图标、系统设置的应用列表、任务切换器都用这里。
-         首页顶栏不再另写一遍，而是读这一个字符串 —— 名称只有一个来源。 -->
+         full 版会把它覆盖成「Plant Identify Library（完整版）」——
+         这是**刻意的**：两个包装在同一台手机上时，桌面与系统列表里
+         必须分得清哪个是完整版。
+
+         注意出包自检（tools/verify_release_apk.py）按版本**全等比对**
+         这个值，改动它必须同步改那份表。 -->
     <string name="app_name">Plant Identify Library</string>
+
+    <!-- 首页顶栏标题。与 app_name **刻意的不同**：
+         顶栏是拿来读的，多一个「（完整版）」会在 titleLarge 下折成两行，
+         而完整版身份在桌面图标上已经说清楚了，顶栏再重复一遍只是噪声。
+         这里只在 main 里定义、flavor 源集不覆盖 —— 所以两个版本的顶栏一致。 -->
+    <string name="app_title">Plant Identify Library</string>
 </resources>

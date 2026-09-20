@@ -305,7 +305,7 @@ object HtmlReportBuilder {
         }
 
         append("<dl>\n")
-        field("中文名称", plant.name)
+        field("正式中文名称", plant.name)
         field("常用名称 / 俗称", plant.commonNames)
         field("拉丁学名", plant.latinName)
         field("科", plant.family)

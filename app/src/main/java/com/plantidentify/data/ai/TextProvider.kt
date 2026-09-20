@@ -16,6 +16,8 @@ data class TextAnalysisRequest(
     val confidence: Double = 0.0,
     val evidence: List<String> = emptyList(),
     val config: AiEndpointConfig,
+    /** 拍摄地点，作为**弱先验**（同 [VisionRequest.place]）。为 null 时 prompt 不提这一节 */
+    val place: String? = null,
 )
 
 /**

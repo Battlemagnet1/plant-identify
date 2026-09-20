@@ -47,9 +47,27 @@ data class Coordinate(val latitude: Double, val longitude: Double)
  */
 class LocationProvider(private val context: Context) {
 
-    /** 定位权限是否已授予。用 COARSE 判断 —— 地名精度不需要 FINE */
+    /**
+     * 是否有任何定位权限。
+     *
+     * 用 COARSE 判断即可 —— 在 Android 的权限模型里，授予 FINE 时
+     * COARSE 必然同时被授予（FINE 是它的超集），所以这一个检查
+     * 覆盖了「精确」与「大致」两种情况。
+     * 要不要用精确能力另看 [hasFinePermission]。
+     */
     fun hasPermission(): Boolean =
         ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED
+
+    /**
+     * 是否拿到了**精确**定位权限。
+     *
+     * Android 12 起权限框提供「大致位置」与「精确位置」两个档，
+     * 用户选了前者时只有 COARSE 被授予。这个区别决定了能不能用 GPS：
+     * 用 COARSE 硬等 GPS 既拿不到更准的坐标（系统会降级），又白等一截时间。
+     */
+    fun hasFinePermission(): Boolean =
+        ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
             PackageManager.PERMISSION_GRANTED
 
     /**
@@ -78,36 +96,58 @@ class LocationProvider(private val context: Context) {
     }
 
     /**
-     * 反向地理编码：坐标 → 短地名。
+     * 反向地理编码：坐标 → 地点名。
      *
      * 失败返回 null（调用方降级为显示经纬度）。**结果会被缓存在观察记录里**，
      * 所以这里不做本地缓存 —— 一次观察只解析一次，没必要再叠一层。
+     *
+     * ## 为什么要试两次区域
+     *
+     * 国内 ROM 的 Geocoder 由厂商实现（高德/百度等），个别机型只在
+     * 区域为中文时才返回条目 —— 系统区域是 en-US 时就什么都拿不到，
+     * 而那正是「用户明明有坐标、界面却只显示经纬度」的常见成因。
+     * 先按系统区域试、再按中文区域试，两次都空才降级。
      */
     suspend fun reverseGeocode(coordinate: Coordinate): String? = runCatching {
         if (!isGeocoderAvailable()) return null
-        val geocoder = Geocoder(context, Locale.getDefault())
 
-        val address: Address? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            // API 33 起必须用异步回调版本（同步版本已被移除）
-            withTimeoutOrNull(GEOCODE_TIMEOUT_MS) { awaitAddress(geocoder, coordinate) }
-        } else {
-            withTimeoutOrNull(GEOCODE_TIMEOUT_MS) {
-                withContext(Dispatchers.IO) {
-                    @Suppress("DEPRECATION")
-                    geocoder
-                        .getFromLocation(coordinate.latitude, coordinate.longitude, 1)
-                        ?.firstOrNull()
-                }
+        for (locale in geocodeLocales()) {
+            val name = withTimeoutOrNull(GEOCODE_TIMEOUT_MS) {
+                fetchAddress(coordinate, locale)?.let { shorten(it) }
             }
+            if (!name.isNullOrBlank()) return@runCatching name
         }
-
-        address?.let { shorten(it) }?.takeIf { it.isNotBlank() }
+        null
     }.getOrElse { error ->
         // 国内 ROM 上 Geocoder 抛 IOException / IllegalArgumentException 都属常见，
         // 不是缺陷，只是这个能力不可用
         Log.w(TAG, "反向地理编码失败，降级为显示坐标", error)
         null
     }
+
+    /** 取一次地址条目。API 33 起同步版本被移除，必须走回调版 */
+    private suspend fun fetchAddress(coordinate: Coordinate, locale: Locale): Address? {
+        val geocoder = Geocoder(context, locale)
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            awaitAddress(geocoder, coordinate)
+        } else {
+            withContext(Dispatchers.IO) {
+                @Suppress("DEPRECATION")
+                geocoder
+                    .getFromLocation(coordinate.latitude, coordinate.longitude, GEOCODE_MAX_RESULTS)
+                    ?.firstOrNull()
+            }
+        }
+    }
+
+    /**
+     * 要尝试的区域，按优先级排列。
+     *
+     * 每次调用重新读 `Locale.getDefault()` —— 缓存在静态字段里的话，
+     * 用户在系统里切换语言后这里仍会拿着旧值。
+     */
+    private fun geocodeLocales(): List<Locale> =
+        listOf(Locale.getDefault(), Locale.CHINA).distinct()
 
     // ---------------- 内部 ----------------
 
@@ -127,7 +167,7 @@ class LocationProvider(private val context: Context) {
             continuation.invokeOnCancellation { signal.cancel() }
             try {
                 manager.getCurrentLocation(
-                    // 优先用网络定位：地名精度用不上 GPS，而 GPS 在室内要等很久
+                    // 有精确权限时优先 GPS —— 详见 preferredProvider 的说明
                     preferredProvider(manager),
                     signal,
                     ContextCompat.getMainExecutor(context),
@@ -155,14 +195,37 @@ class LocationProvider(private val context: Context) {
             runCatching { manager.isProviderEnabled(provider) }.getOrDefault(false)
         }
 
-    private fun preferredProvider(manager: LocationManager): String =
-        when {
-            runCatching { manager.isProviderEnabled(LocationManager.NETWORK_PROVIDER) }
-                .getOrDefault(false) -> LocationManager.NETWORK_PROVIDER
-            runCatching { manager.isProviderEnabled(LocationManager.GPS_PROVIDER) }
-                .getOrDefault(false) -> LocationManager.GPS_PROVIDER
+    /**
+     * 请求当前位置时优先用哪个 provider。
+     *
+     * ## 为什么改成 GPS 优先
+     *
+     * 原来优先 NETWORK —— 理由是「地名精度用不上 GPS，而 GPS 在室内要等很久」。
+     * 那个判断在**只要一个大致区域**时成立，但实际需求是「精确到地点名」：
+     * 网络定位的误差常在几百米到一两公里，反查出来的地址自然只到区；
+     * GPS 的几十米误差才可能落到「某路 / 某号 / 某小区」这一级。
+     *
+     * 代价是室内可能要等到超时（见 [FRESH_TIMEOUT_MS]）。这个代价可以接受：
+     * 位置是在「添加植物」页异步取的，界面先给「定位中」再回填，不挡拍照；
+     * 而且等到超时后会退回最后已知位置，不会一直空着。
+     *
+     * **只有拿到精确权限时才优先 GPS** —— 用户选的是「大致位置」的话，
+     * 系统本来就不会把 GPS 的精确结果给出来，白等一截没有意义。
+     */
+    private fun preferredProvider(manager: LocationManager): String {
+        fun enabled(provider: String) =
+            runCatching { manager.isProviderEnabled(provider) }.getOrDefault(false)
+
+        val gps = LocationManager.GPS_PROVIDER
+        val network = LocationManager.NETWORK_PROVIDER
+
+        return when {
+            hasFinePermission() && enabled(gps) -> gps
+            enabled(network) -> network
+            enabled(gps) -> gps
             else -> LocationManager.PASSIVE_PROVIDER
         }
+    }
 
     @androidx.annotation.RequiresApi(Build.VERSION_CODES.TIRAMISU)
     private suspend fun awaitAddress(
@@ -187,38 +250,81 @@ class LocationProvider(private val context: Context) {
         runCatching { Geocoder.isPresent() }.getOrDefault(false)
 
     /**
-     * 从一串地址字段里拼一个**短**地名。
+     * 从一串地址字段里拼一个**够精确又够短**的地名。
      *
-     * 规格书要求显示「📍 某校园」而不是「中国XX省XX市XX区XX路123号」——
-     * 后者在列表里会把卡片撑爆，也不是用户想看的粒度。
-     * 顺序是按「离用户最近」排的：先景点/校园名，再街道，再市区。
+     * ## 两段式，而不是把各级拼起来
+     *
+     * 原实现是「featureName + subLocality + locality + ...」全拼再截断到 24 字。
+     * 那有个致命问题：**截断会把最有信息量的那一级砍掉**。
+     * 「中国浙江省杭州市西湖区北山街123号」截到 24 字还剩「中国浙江省杭州市西湖区北山街1」——
+     * 看着挺长，其实最重要的门牌号已经被切了，而且前面那一长串省市名
+     * 对用户毫无价值（他当然知道自己在哪个省）。
+     *
+     * 现在改成「**最细一级 + 上一级行政区**」：
+     * 先按 [premises]/[featureName]/路+门牌 找出最具体的地点，
+     * 前面挂一个区级行政区做定位。既精确，又不会长到撑爆卡片。
+     *
+     * ## 为什么用「最细一级」而不是依次降级
+     *
+     * `premises`（小区/大厦）比 `thoroughfare`（路）更有辨识度 ——
+     * 「万科城市花园」比「某某路」更能说明人在哪。所以按辨识度排序取第一个有值的，
+     * 而不是按行政层级从大到小拼。
      */
     private fun shorten(address: Address): String {
-        val candidates = listOfNotNull(
-            // featureName 常是校园/公园/大厦名，正合规格书里「某校园」的例子；
-            // 但它有时是一串门牌号，那就没意义了
-            address.featureName?.takeIf { name -> name.any { !it.isDigit() } },
-            address.subLocality,
-            address.locality,
-            address.subAdminArea,
-            address.adminArea,
-        )
-        return candidates
+        // 最具体的那一级。按「辨识度」从高到低试
+        val finest = listOfNotNull(
+            address.premises?.trim()?.takeIf { it.isNotEmpty() },
+            // featureName 常是校园/公园/大厦/景点名，正合规格书里「某校园」的例子；
+            // 但它有时只是一串门牌号，那就不如后面的「路 + 门牌」有信息量
+            address.featureName
+                ?.trim()
+                ?.takeIf { name -> name.isNotEmpty() && name.any { !it.isDigit() } },
+            listOfNotNull(address.thoroughfare, address.subThoroughfare)
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .joinToString("")
+                .takeIf { it.isNotEmpty() },
+        ).firstOrNull()
+
+        // 上级行政区，只取一级 —— 取多了就把长度预算吃光
+        val area = listOfNotNull(address.subLocality, address.locality, address.subAdminArea)
             .map { it.trim() }
             .filter { it.isNotEmpty() }
             .distinct()
-            .joinToString("")
-            .take(MAX_NAME_LENGTH)
+            .firstOrNull()
+
+        return when {
+            finest != null && area != null -> "$area·$finest"
+            finest != null -> finest
+            area != null -> area
+            else -> address.adminArea?.trim().orEmpty()
+        }.take(MAX_NAME_LENGTH)
     }
 
     private companion object {
         const val TAG = "LocationProvider"
 
-        /** 等「当前位置」的上限。室内/无信号时回调可能永远不来 */
-        const val FRESH_TIMEOUT_MS = 6_000L
+        /**
+         * 等「当前位置」的上限。
+         *
+         * 从 6 秒放宽到 10 秒：改用 GPS 优先后，冷启动（尤其在室内靠
+         * 卫星补星）常常超过 6 秒。位置是在「添加植物」页异步取的、
+         * 不挡拍照，多等这几秒换一个能精确到路名的坐标是划算的。
+         * 超时后仍会退回最后已知位置。
+         */
+        const val FRESH_TIMEOUT_MS = 10_000L
 
         /** 地理编码的上限。厂商实现可能一直不回调 */
         const val GEOCODE_TIMEOUT_MS = 6_000L
+
+        /**
+         * 一次取几条地址候选。
+         *
+         * 取 3 条而不是 1 条：系统的地理编码器在边界处常会给出
+         * 几个不同粒度的结果，多拿两条能提高「至少有一条带门牌」的概率。
+         * [shorten] 只用第一条，所以多取不会让地名变长。
+         */
+        const val GEOCODE_MAX_RESULTS = 3
 
         /** 地名长度上限 —— 再长在列表和卡片里都放不下 */
         const val MAX_NAME_LENGTH = 24

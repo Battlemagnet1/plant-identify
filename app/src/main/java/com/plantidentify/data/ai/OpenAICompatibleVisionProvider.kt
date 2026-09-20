@@ -42,9 +42,20 @@ class OpenAICompatibleVisionProvider(
             )
         }
 
-        // 第一轮带上 response_format 与 temperature 争取更稳定的输出；
-        // 若服务端表示不认识这些参数，则去掉它们重试（见下方 unsupportedParams 分支）
-        var includeStructuredParams = true
+        // 第一轮**不带** response_format。
+        //
+        // 原策略是「先带上、被服务端拒了再去掉重试」，隐藏代价很大：
+        // 那次重试要把**整个请求体连同全部图片**重新发一遍 ——
+        // 5 张 1536px 图 base64 后接近 2 MB，白传一次就是几秒到几十秒，
+        // 而且它发生在**第一次识别**，用户第一印象最差的时候。
+        //
+        // 而 prompt 已经强约束「只输出一个 JSON 对象、不要代码块」，
+        // 解析侧还有六级容错兜底。所以默认路径完全可以不带它 ——
+        // 常见情况下请求数从「2 次」降到「1 次」。
+        //
+        // 只有在**解析真的失败**时，才把它打开再试一次
+        //（有些服务端收到它才会走严格 JSON 模式），见下方 ParseAttempt.Failed 分支。
+        var includeStructuredParams = false
         var correction: String? = null
 
         repeat(MAX_ATTEMPTS) { attempt ->
@@ -88,6 +99,10 @@ class OpenAICompatibleVisionProvider(
                                 // 容错链路第 5 步：告诉模型上次哪里不合规，命中率明显高于原样重发
                                 correction = "你上次的输出无法解析：${parsed.reason}。" +
                                     "请严格遵守 JSON 格式，只输出一个 JSON 对象。"
+                                // 顺手把 response_format 打开 —— 有些服务端收到它
+                                // 才会启用严格 JSON 模式。第一次请求没带它正是为了
+                                // 避开「被拒后整包重传」的浪费；到这一步说明真的需要它了
+                                includeStructuredParams = true
                             } else {
                                 // 用尽重试：降级为半结构化，保留原文而不丢结果（验收标准 ⑤）
                                 return VisionCallResult.Success(
@@ -106,7 +121,16 @@ class OpenAICompatibleVisionProvider(
                 }
 
                 is ChatOutcome.HttpError -> {
-                    if (includeStructuredParams && outcome.unsupportedParams) {
+                    // 服务端不认 response_format：关掉它、还有次数就再试一次。
+                    //
+                    // 加次数判断是必要的：以前可以无脑「关掉再重试」，
+                    // 因为那次重试必然还在循环额度内。现在 structured 是在
+                    // 解析失败那一步才打开的，如果刚好是最后一次机会，
+                    // 「关掉」之后没有下一轮，就会掉出循环报一个含糊的
+                    // 「重试后仍未获得可用的识别结果」—— 那比原始错误更难排查
+                    if (includeStructuredParams && outcome.unsupportedParams &&
+                        attempt < MAX_ATTEMPTS - 1
+                    ) {
                         includeStructuredParams = false
                     } else {
                         return VisionCallResult.Failure(outcome.failure)
@@ -220,6 +244,8 @@ class OpenAICompatibleVisionProvider(
             roles = request.images.map { it.role },
             strategy = request.strategy,
             correction = correction,
+            // 地点弱先验。为 null 时 prompt 里连这一节都不出现
+            placeHint = request.place,
         )
 
         val content = JSONArray().apply {
@@ -336,8 +362,14 @@ class OpenAICompatibleVisionProvider(
         .put("image_url", JSONObject().put("url", dataUri))
 
     private companion object {
-        /** 首次 + 一次重试 */
-        private const val MAX_ATTEMPTS = 2
+        /**
+         * 最多几次请求。
+         *
+         * 从 2 提到 3，是为「解析失败 → 打开 response_format → 被服务端拒」
+         * 这条路径留出额度：那时候需要第三次、不带该参数的请求才能拿到结果。
+         * 常见路径仍然只有 1 次请求（默认不带 response_format 且一次就解析成功）。
+         */
+        private const val MAX_ATTEMPTS = 3
 
         private const val MAX_OUTPUT_TOKENS = 2048
 

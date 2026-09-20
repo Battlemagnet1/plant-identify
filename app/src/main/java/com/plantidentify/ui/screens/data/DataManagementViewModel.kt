@@ -100,6 +100,20 @@ class DataManagementViewModel(
             initialValue = false,
         )
 
+    /**
+     * 「把地点随识别请求发给 AI」开关。
+     *
+     * 与 [locationEnabled] 分开：前者管「要不要记」，这个管「要不要发出去」。
+     * 默认 false —— 地点是行踪信息，不该因为用户想记个坐标就顺手送出去。
+     */
+    val locationShareWithAi: StateFlow<Boolean> = locationSettingsStore.choice
+        .map { it.shareWithAi }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
+            initialValue = false,
+        )
+
     init {
         refreshEstimate()
         refreshBackups()
@@ -142,6 +156,11 @@ class DataManagementViewModel(
 
     fun setLocationEnabled(enabled: Boolean) {
         viewModelScope.launch { locationSettingsStore.setEnabled(enabled) }
+    }
+
+    /** 设置「允许把地点发给 AI」。只在 [locationEnabled] 为真时界面上才可见 */
+    fun setShareLocationWithAi(share: Boolean) {
+        viewModelScope.launch { locationSettingsStore.setShareWithAi(share) }
     }
 
     /**

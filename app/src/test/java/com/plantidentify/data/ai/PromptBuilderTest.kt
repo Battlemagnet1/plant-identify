@@ -91,4 +91,97 @@ class PromptBuilderTest {
         )
         assertTrue(prompt.contains("3 张照片"))
     }
+
+    // ---------------- 正式名 / 俗称 分离 ----------------
+
+    @Test
+    fun `识别 prompt 把 name 定义成正式中文名称`() {
+        val prompt = PromptBuilder.buildRecognitionPrompt(roles = List(1) { ImageRole.LEAF })
+        assertTrue(
+            "schema 里应写「正式中文名称」而不是含糊的「中文名称」",
+            prompt.contains("\"name\": \"正式中文名称\""),
+        )
+    }
+
+    @Test
+    fun `识别 prompt 明确禁止用俗称与商品名`() {
+        // 模型的默认倾向是「用最常见的叫法」，而最常见的往往是俗称。
+        // 只写「正式中文名」四个字不够，得给反例它才知道边界在哪
+        val prompt = PromptBuilder.buildRecognitionPrompt(roles = List(1) { ImageRole.LEAF })
+
+        assertTrue("应有一段专门讲 name 怎么写", prompt.contains("关于 name 的写法"))
+        assertTrue("应点名俗称不属于正式名", prompt.contains("俗称"))
+        assertTrue("应给出具体反例，否则模型不知道边界", prompt.contains("法国梧桐"))
+        assertTrue("应给出对应的正式名", prompt.contains("悬铃木"))
+    }
+
+    @Test
+    fun `分析 prompt 不让模型把正式名再写进俗称栏`() {
+        // 「紫薇、紫薇」这种重复会让用户以为程序出了问题
+        val prompt = analysisPrompt()
+        assertTrue(
+            "应禁止把正式中文名本身写进 common_names",
+            prompt.contains("也不要把这株植物的正式中文名本身再写一遍"),
+        )
+    }
+
+    // ---------------- 地点弱先验 ----------------
+
+    @Test
+    fun `不给地点时 prompt 里不出现地点节`() {
+        // 写「地点：未知」反而会让模型自己脑补一个环境，
+        // 所以约定是**整节不出现**
+        val prompt = PromptBuilder.buildRecognitionPrompt(roles = List(1) { ImageRole.LEAF })
+        assertFalse(prompt.contains("## 拍摄地点"))
+    }
+
+    @Test
+    fun `给了地点才出现地点节并带上地名`() {
+        val prompt = PromptBuilder.buildRecognitionPrompt(
+            roles = List(1) { ImageRole.LEAF },
+            placeHint = "杭州市西湖区·北山街",
+        )
+        assertTrue(prompt.contains("## 拍摄地点"))
+        assertTrue(prompt.contains("杭州市西湖区·北山街"))
+    }
+
+    @Test
+    fun `地点被限定为弱先验而不是鉴定依据`() {
+        // 这段措辞是防「地点绑死识别」的唯一保障：
+        // 一旦模型把「拍摄地在杭州」当成「只可能是杭州的树种」，
+        // 引种栽培或室内养护的植株就永远识别不对
+        val prompt = PromptBuilder.buildRecognitionPrompt(
+            roles = List(1) { ImageRole.LEAF },
+            placeHint = "杭州市西湖区·北山街",
+        )
+        assertTrue(prompt.contains("不是鉴定依据"))
+        assertTrue("必须明说冲突时以形态特征为准", prompt.contains("以形态特征为准"))
+        assertTrue("必须禁止把地点写进 evidence（依据栏混进地点就没法复核了）",
+            prompt.contains("把地点写进 evidence"))
+    }
+
+    @Test
+    fun `分析 prompt 同样接受地点且同样按弱先验处理`() {
+        val prompt = PromptBuilder.buildAnalysisPrompt(
+            name = "紫薇",
+            latinName = "Lagerstroemia indica",
+            family = "千屈菜科",
+            genus = "紫薇属",
+            category = "落叶灌木",
+            confidence = 0.92,
+            evidence = emptyList(),
+            placeHint = "杭州市西湖区·北山街",
+        )
+        assertTrue(prompt.contains("## 拍摄地点"))
+        assertTrue(prompt.contains("不是鉴定依据"))
+    }
+
+    @Test
+    fun `空白地点等同于没有地点`() {
+        val prompt = PromptBuilder.buildRecognitionPrompt(
+            roles = List(1) { ImageRole.LEAF },
+            placeHint = "   ",
+        )
+        assertFalse("只有空白的字符串不该生成地点节", prompt.contains("## 拍摄地点"))
+    }
 }

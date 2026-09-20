@@ -156,9 +156,13 @@ fun PlantIdentifyNavHost(
                     imageStore = container.imageStore,
                     imageCompressor = container.imageCompressor,
                     aiSettingsStore = container.aiSettingsStore,
+                    locationSettingsStore = container.locationSettingsStore,
                     visionProvider = container.visionProvider,
-                    textProvider = container.textProvider,
                     repository = container.plantRepository,
+                    analysisRunner = container.analysisRunner,
+                    // 必须是应用级作用域：保存后本页会被 popUpTo 移除，
+                    // viewModelScope 会让随后的文字分析被取消
+                    externalScope = container.applicationScope,
                 ),
             )
 
@@ -259,6 +263,7 @@ fun PlantIdentifyNavHost(
                     repository = container.plantRepository,
                     textProvider = container.textProvider,
                     aiSettingsStore = container.aiSettingsStore,
+                    locationSettingsStore = container.locationSettingsStore,
                 ),
             )
 

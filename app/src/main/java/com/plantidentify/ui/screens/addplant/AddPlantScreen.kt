@@ -61,6 +61,19 @@ import com.plantidentify.ui.util.openAppSettings
 import java.io.File
 
 /**
+ * 定位权限的申请清单。
+ *
+ * 精确与大致一起申请：用户可以在系统权限框里选「大致位置」，
+ * 那时只授予 COARSE，LocationProvider 会自动退回网络定位 ——
+ * 能工作，只是地名只到区级。只申请 COARSE 就没有这个选择了，
+ * 用户即使愿意给精确位置也拿不到。
+ */
+private val LOCATION_PERMISSIONS = arrayOf(
+    Manifest.permission.ACCESS_COARSE_LOCATION,
+    Manifest.permission.ACCESS_FINE_LOCATION,
+)
+
+/**
  * 添加植物页（规格书第三、四节）。
  *
  * Phase 2 的职责：拍照 / 相册多选 / 删除 / 调整顺序 / 部位标注 / 原图落盘。
@@ -131,10 +144,14 @@ fun AddPlantScreen(
 
     // 位置权限（规格书第十八节）。拒绝是正常路径，不做任何惩罚性处理 ——
     // 应用照常拍照、识别、存档案，只是不记录地点。
+    //
+    // 同时申请「精确」与「大致」两档：只要 COARSE 的话地点永远只到区级，
+    // 而这里要的是能定位到具体地点名。用户选「大致位置」也能用，
+    // 只是精度差一档（LocationProvider 会自动退回网络定位）。
     val locationPermissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission(),
-    ) { granted ->
-        if (granted) {
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) { grants ->
+        if (grants.values.any { it }) {
             onCaptureLocation()
         } else {
             // 被拒不是“什么都不做”：要让界面知道，
@@ -151,7 +168,7 @@ fun AddPlantScreen(
         // 一个用不到位置的版本突然弹权限框，用户只会觉得莫名其妙
         if (AppEdition.isFull && requestLocationPermission) {
             onLocationPermissionRequested()
-            locationPermissionLauncher.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
+            locationPermissionLauncher.launch(LOCATION_PERMISSIONS)
         }
     }
 
@@ -315,9 +332,7 @@ fun AddPlantScreen(
                 TextButton(
                     onClick = {
                         onLocationAllowed()
-                        locationPermissionLauncher.launch(
-                            Manifest.permission.ACCESS_COARSE_LOCATION,
-                        )
+                        locationPermissionLauncher.launch(LOCATION_PERMISSIONS)
                     },
                 ) { Text("允许") }
             },

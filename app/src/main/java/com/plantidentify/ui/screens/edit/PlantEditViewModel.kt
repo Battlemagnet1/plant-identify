@@ -201,7 +201,7 @@ class PlantEditViewModel(
         val current = _form.value
         if (!current.canSave) {
             _message.value = if (current.name.isBlank()) {
-                "中文名称不能为空"
+                "正式中文名称不能为空"
             } else {
                 "置信度请填 0–100 之间的整数"
             }

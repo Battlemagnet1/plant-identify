@@ -19,7 +19,13 @@ import com.plantidentify.domain.model.ConfidenceGrade
  * 永远保留模型原话，解析成功与否都能展示。
  */
 data class RecognitionResult(
-    /** 中文名称 */
+    /**
+     * **正式中文名称**（如「悬铃木」「紫薇」）。
+     *
+     * prompt 里明确要求不给俗称、商品名与园艺品种名 —— 这个字段会直接
+     * 落进 `PlantRecordEntity.name`，而那一栏是搜索、去重与归并的入口。
+     * 俗称由文字分析通道的 `PlantAnalysis.commonNames` 单独提供。
+     */
     val name: String,
 
     /** 拉丁学名 */

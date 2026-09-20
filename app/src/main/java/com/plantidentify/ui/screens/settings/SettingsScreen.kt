@@ -38,6 +38,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -48,6 +49,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.plantidentify.AppEdition
+import com.plantidentify.BuildConfig
+import com.plantidentify.R
 import com.plantidentify.data.ai.AiEndpointConfig
 import com.plantidentify.data.ai.AiPreset
 import com.plantidentify.data.ai.PromptStrategy
@@ -118,6 +121,8 @@ fun SettingsScreen(
             contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
+            item { AppVersionCard() }
+
             item {
                 ConfigStatusCard(
                     form = form,
@@ -381,6 +386,42 @@ fun SettingsScreen(
             }
 
             item { Spacer(Modifier.height(24.dp)) }
+        }
+    }
+}
+
+/**
+ * 版本信息（Phase 1 从首页顶栏搬来）。
+ *
+ * 原先版本号挂在首页顶栏标题下面，而完整版的标题带「（完整版）」后缀，
+ * 在 titleLarge 下会折成两行 —— 再加一行版本号就是三行，很难看。
+ * 顶栏恢复单行之后，版本号放到这里：想查的人知道来设置页看，不想看的人不被它占地方。
+ *
+ * 顺带把版本名与构建版本号（versionCode）都列出来 ——
+ * 报问题时报这两个数，比只说「最新版」有用得多。
+ */
+@Composable
+private fun AppVersionCard() {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = stringResource(R.string.app_title),
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Medium,
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "v${BuildConfig.VERSION_NAME}（构建号 ${BuildConfig.VERSION_CODE}）" +
+                    if (AppEdition.isFull) " · 完整版" else " · 基础版",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
