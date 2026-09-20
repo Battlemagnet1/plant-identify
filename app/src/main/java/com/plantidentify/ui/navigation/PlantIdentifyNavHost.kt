@@ -153,11 +153,8 @@ fun PlantIdentifyNavHost(
             val recognitionViewModel: RecognitionViewModel = viewModel(
                 factory = RecognitionViewModel.factory(
                     draftStore = container.captureDraftStore,
-                    imageStore = container.imageStore,
-                    imageCompressor = container.imageCompressor,
-                    aiSettingsStore = container.aiSettingsStore,
-                    locationSettingsStore = container.locationSettingsStore,
-                    visionProvider = container.visionProvider,
+                    // 压缩 / 视觉 / 落库都在执行体里 —— 与 Phase 2 的后台任务同一份实现
+                    executor = container.recognitionExecutor,
                     repository = container.plantRepository,
                     analysisRunner = container.analysisRunner,
                     // 必须是应用级作用域：保存后本页会被 popUpTo 移除，

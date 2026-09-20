@@ -17,6 +17,7 @@ import com.plantidentify.data.image.ImageCompressor
 import com.plantidentify.data.local.Migrations
 import com.plantidentify.data.local.PlantIdentifyDatabase
 import com.plantidentify.data.recognition.AnalysisRunner
+import com.plantidentify.data.recognition.RecognitionExecutor
 import com.plantidentify.data.location.LocationProvider
 import com.plantidentify.data.location.LocationSettingsStore
 import com.plantidentify.data.repository.PlantRepository
@@ -169,6 +170,24 @@ class AppContainer(context: Context) {
             aiSettingsStore = aiSettingsStore,
             textProvider = textProvider,
             repository = plantRepository,
+        )
+    }
+
+    /**
+     * 识别流程的共享执行体（压缩 → 视觉 → 落库）。
+     *
+     * 「识别页立即识别」与「Phase 2 的后台任务」都调它。
+     * 它不依赖任何 UI，所以 Worker 也能直接用 —— 这是整套任务队列的前提：
+     * 如果后台另写一份，两份 prompt 与两份压缩参数迟早会分叉。
+     */
+    val recognitionExecutor: RecognitionExecutor by lazy {
+        RecognitionExecutor(
+            aiSettingsStore = aiSettingsStore,
+            visionProvider = visionProvider,
+            imageCompressor = imageCompressor,
+            imageStore = imageStore,
+            repository = plantRepository,
+            locationSettingsStore = locationSettingsStore,
         )
     }
 

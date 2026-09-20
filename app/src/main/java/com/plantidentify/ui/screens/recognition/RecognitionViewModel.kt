@@ -7,20 +7,11 @@ import androidx.lifecycle.viewmodel.initializer
 import android.util.Log
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.plantidentify.data.ai.AiFailure
-import com.plantidentify.data.ai.AiSettingsStore
-import com.plantidentify.data.ai.RecognitionResult
-import com.plantidentify.data.ai.VisionCallResult
-import com.plantidentify.data.ai.VisionImage
-import com.plantidentify.data.ai.VisionProvider
-import com.plantidentify.data.ai.VisionRequest
 import com.plantidentify.data.ai.VisionResponse
 import com.plantidentify.data.draft.CaptureDraftStore
-import com.plantidentify.data.image.ImageCompressor
-import com.plantidentify.data.location.LocationSettingsStore
-import com.plantidentify.data.location.aiPlaceHint
 import com.plantidentify.data.recognition.AnalysisRunner
+import com.plantidentify.data.recognition.RecognitionExecutor
 import com.plantidentify.data.repository.PlantRepository
-import com.plantidentify.data.storage.ImageStore
 import com.plantidentify.domain.model.MergeSuggestion
 import com.plantidentify.domain.model.TimingTrace
 import kotlinx.coroutines.CoroutineScope
@@ -57,11 +48,14 @@ import kotlinx.coroutines.launch
  */
 class RecognitionViewModel(
     private val draftStore: CaptureDraftStore,
-    private val imageStore: ImageStore,
-    private val imageCompressor: ImageCompressor,
-    private val aiSettingsStore: AiSettingsStore,
-    private val locationSettingsStore: LocationSettingsStore,
-    private val visionProvider: VisionProvider,
+    /**
+     * 识别流程的共享执行体。
+     *
+     * 压缩 / 视觉请求 / 落库都搬去了它那里，本类只负责「把结果映射成界面状态」。
+     * 这样 Phase 2 的 Worker 能用同一份实现跑后台任务，
+     * 不会出现「前台一套 prompt、后台一套 prompt」的分叉。
+     */
+    private val executor: RecognitionExecutor,
     private val repository: PlantRepository,
     private val analysisRunner: AnalysisRunner,
     /**
@@ -113,9 +107,6 @@ class RecognitionViewModel(
         viewModelScope.launch {
             _state.value = RecognitionUiState.Preparing
 
-            // 计时从「开始准备」算起，这样压缩那一段才是真的压缩耗时
-            val trace = TimingTrace()
-
             val draft = draftStore.current()
             if (draft.isEmpty) {
                 _state.value = RecognitionUiState.Failed(
@@ -125,84 +116,45 @@ class RecognitionViewModel(
                 return@launch
             }
 
-            val config = aiSettingsStore.current()
-            if (!config.vision.isUsable) {
-                _state.value = RecognitionUiState.Failed(
-                    AiFailure.NotConfigured(config.vision.missingFields),
-                    canOpenSettings = true,
-                )
-                return@launch
-            }
-
-            // 逐张生成（或复用）压缩副本
-            val images = draft.images.mapNotNull { draftImage ->
-                imageCompressor
-                    .compressedFor(imageStore.resolve(draftImage.relativePath))
-                    .getOrNull()
-                    ?.let { compressed ->
-                        VisionImage(file = compressed, role = draftImage.role)
-                    }
-            }
-
-            if (images.isEmpty()) {
-                _state.value = RecognitionUiState.Failed(
-                    // 本机文件的问题，不是服务端的问题 —— 用 LocalProblem
-                    // 才不会在界面上被冠以「服务返回：」
-                    AiFailure.LocalProblem("照片读取失败，请回到上一步重新添加照片"),
-                    canOpenSettings = false,
-                )
-                return@launch
-            }
-
-            trace.mark("压缩图片")
-            _timing.value = trace.segments()
-
-            _state.value = RecognitionUiState.Recognizing(
-                imageCount = images.size,
-                usedFallbackForSomeImages = images.size < draft.count,
-            )
-
-            // 地点弱先验。只有用户在设置里**明确允许上传**时才有值 ——
-            // 默认关闭，且「关」意味着 prompt 里连这一节都不出现。
-            // 在这里算一次并记住，保存阶段的文字分析复用同一个值。
-            placeHint = locationSettingsStore.current().let { choice ->
-                aiPlaceHint(
-                    shareWithAi = choice.shareWithAi,
-                    locationName = draft.locationName,
-                    latitude = draft.latitude,
-                    longitude = draft.longitude,
+            // 压缩与请求都在执行体里。这里只负责把它的结果翻译成界面状态。
+            val outcome = executor.recognize(draft) { imageCount, usedFallback ->
+                // 压缩完成、即将发请求 —— 切到「正在请求模型」。
+                // 放在回调里而不是调用之前：「有几张图真的上传了」要等压缩跑完才知道
+                _state.value = RecognitionUiState.Recognizing(
+                    imageCount = imageCount,
+                    usedFallbackForSomeImages = usedFallback,
                 )
             }
 
-            // 先取出结果、记下这一段耗时，再决定状态 ——
-            // 顺序反过来的话，失败分支会漏掉这次计时
-            val vision = visionProvider.recognize(
-                VisionRequest(
-                    images = images,
-                    config = config.vision,
-                    strategy = config.promptStrategy,
-                    place = placeHint,
-                ),
-            )
-            trace.mark("识别请求")
-            _timing.value = trace.segments()
-            Log.i(TimingTrace.LOG_TAG, "本次识别 ${trace.render()}")
+            when (outcome) {
+                is RecognitionExecutor.RecognizeOutcome.Recognized -> {
+                    _timing.value = outcome.timing
+                    // 地点先验要**记住**：保存阶段的文字分析复用同一个值。
+                    // 不记的话，保存成功后草稿已被清空，百科请求就丢了地点，
+                    // 同一株植物的两次请求口径不一致
+                    placeHint = outcome.placeHint
+                    Log.i(TimingTrace.LOG_TAG, "本次识别 ${outcome.timing.renderForLog()}")
+                    _state.value = RecognitionUiState.Success(outcome.response)
+                }
 
-            _state.value = when (vision) {
-                is VisionCallResult.Success -> RecognitionUiState.Success(vision.response)
-                is VisionCallResult.Failure -> RecognitionUiState.Failed(
-                    vision.failure,
-                    // 配置类错误直接引导去设置页；其他错误留在本页重试更顺手
-                    canOpenSettings = vision.failure is AiFailure.NotConfigured ||
-                        vision.failure is AiFailure.Unauthorized ||
-                        vision.failure is AiFailure.ModelNotFound ||
-                        vision.failure is AiFailure.ModelNotVisionCapable ||
-                        vision.failure is AiFailure.EndpointNotFound ||
-                        vision.failure is AiFailure.CleartextBlocked,
-                )
+                is RecognitionExecutor.RecognizeOutcome.Failed -> {
+                    _state.value = RecognitionUiState.Failed(
+                        outcome.failure,
+                        canOpenSettings = outcome.canOpenSettings,
+                    )
+                }
             }
         }
     }
+
+    /**
+     * 把耗时分段拼成一行日志。
+     *
+     * 结果页的耗时卡在识别成功后才看得到，失败的那一轮不会有卡片 ——
+     * 而「失败时卡在哪一步」恰恰是更值得知道的信息，只能靠这行日志。
+     */
+    private fun List<TimingTrace.Segment>.renderForLog(): String =
+        joinToString(" / ") { "${it.label} ${it.millis}ms" }
 
     /**
      * 保存当前识别结果。
@@ -240,36 +192,14 @@ class RecognitionViewModel(
         }
 
         viewModelScope.launch {
-            val draft = draftStore.current()
-
-            // ---- 分支一：给已有观察补图 → 写回原观察
-            if (draft.isReanalysis) {
-                _saveState.value = SaveState.Saving
-                repository.reanalyzeObservation(
-                    observationId = draft.targetObservationId!!,
+            _saveState.value = SaveState.Saving
+            applyPersistOutcome(
+                executor.persistNow(
                     result = result,
                     rawAiJson = current.response.rawText,
-                ).onSuccess { plantId ->
-                    _saveState.value = SaveState.SavedToExistingObservation(plantId)
-                    // 观察内容变了，但百科是基于植物整体生成的，不必重跑
-                }.onFailure { error ->
-                    _saveState.value = SaveState.Failed(
-                        error.message ?: "更新观察失败，请重试",
-                    )
-                }
-                return@launch
-            }
-
-            // ---- 分支二 / 三：先问归并，再决定
-            _saveState.value = SaveState.Saving
-            val suggestion = repository.findMergeSuggestion(result)
-            if (suggestion.hasCandidate) {
-                // 只提示、不写入。是否归并完全由用户确认 —— 规格书第十四点五节
-                _saveState.value = SaveState.AwaitingMergeDecision(suggestion)
-                return@launch
-            }
-
-            saveAsNewPlant(current, result)
+                    draft = draftStore.current(),
+                ),
+            )
         }
     }
 
@@ -282,18 +212,21 @@ class RecognitionViewModel(
 
         viewModelScope.launch {
             _saveState.value = SaveState.Saving
-            repository.appendObservation(
-                plantId = target.id,
-                result = result,
-                rawAiJson = current.response.rawText,
-            ).onSuccess { plantId ->
-                // 追加观察后不自动重跑百科：已有植物的百科是按整株生成的，
-                // 本次新增的照片未必带来新信息，主动覆盖反而可能让内容变差。
-                // 需要更新时由用户在详情页点「重新生成」。
-                _saveState.value = SaveState.SavedWithAnalysis(plantId)
-            }.onFailure { error ->
-                _saveState.value = SaveState.Failed(error.message ?: "添加观察失败，请重试")
-            }
+            executor
+                .appendToExisting(
+                    plantId = target.id,
+                    result = result,
+                    rawAiJson = current.response.rawText,
+                )
+                .onSuccess { plantId ->
+                    // 追加观察后不自动重跑百科：已有植物的百科是按整株生成的，
+                    // 本次新增的照片未必带来新信息，主动覆盖反而可能让内容变差。
+                    // 需要更新时由用户在详情页点「重新生成」。
+                    _saveState.value = SaveState.SavedWithAnalysis(plantId)
+                }
+                .onFailure { error ->
+                    _saveState.value = SaveState.Failed(error.message ?: "添加观察失败，请重试")
+                }
         }
     }
 
@@ -305,49 +238,77 @@ class RecognitionViewModel(
 
         viewModelScope.launch {
             _saveState.value = SaveState.Saving
-            saveAsNewPlant(current, result)
+            applyPersistOutcome(
+                executor.persistNow(
+                    result = result,
+                    rawAiJson = current.response.rawText,
+                    draft = draftStore.current(),
+                    // 用户已经在那次提示里选了「创建新的植物」——
+                    // 不跳过的话执行体会再问一次，界面表现为点了没反应
+                    skipMergeCheck = true,
+                ),
+            )
         }
     }
 
     /**
-     * 基础结果落库，然后**立刻返回**，把文字分析丢到后台。
+     * 把落库结果翻译成界面状态。
      *
-     * ## 为什么不再等分析跑完
+     * ## 「已落库」与「已启动分析」是两步
      *
-     * 原先这里保存完直接 `runAnalysis(...)`，界面停在 `SaveState.Saving`
-     * （文案是「正在保存（可能包含文字分析，耗时较长）」）——
-     * 用户感知到的「保存好慢」就是这一次串行的网络请求。
+     * 落库一完成就置 [SaveState.SavedAnalysisPending] 并让界面可以立刻导航离开，
+     * 文字分析交给应用级作用域。原先这里要等分析跑完
+     * （界面停在「正在保存（可能包含文字分析，耗时较长）」）——
+     * 用户感知到的「保存好慢」就是那一次串行的网络请求。
      *
-     * 而它其实不必在这儿等：档案在落库那一瞬间就已经完整了 ——
-     * 可查、可搜、可导出。百科描述是**锦上添花**，
-     * 晚几秒到、甚至失败，都不影响档案的可用性（规格书第三十节也是这么要求的）。
+     * 而它其实不必等：档案在落库那一瞬间就已经完整 —— 可查、可搜、可导出。
+     * 百科描述是锦上添花，晚几秒到、甚至失败，都不影响档案的可用性
+     * （规格书第三十节也是这么要求的）。
      */
-    private suspend fun saveAsNewPlant(
-        current: RecognitionUiState.Success,
-        result: RecognitionResult,
-    ) {
-        // ---- 第一步：基础识别结果落库。这一步失败就没有档案，如实报错
-        val plantId = repository
-            .saveAsNewPlant(result = result, rawAiJson = current.response.rawText)
-            .getOrElse { error ->
-                _saveState.value = SaveState.Failed(error.message ?: "保存失败，请重试")
-                return
+    private fun applyPersistOutcome(persisted: Result<RecognitionExecutor.PersistOutcome>) {
+        persisted
+            .onSuccess { outcome ->
+                when (outcome) {
+                    is RecognitionExecutor.PersistOutcome.UpdatedObservation -> {
+                        // 观察内容变了，但百科是基于植物整体生成的，不必重跑
+                        _saveState.value = SaveState.SavedToExistingObservation(outcome.plantId)
+                    }
+
+                    is RecognitionExecutor.PersistOutcome.AwaitingDecision -> {
+                        // 只提示、不写入。是否归并完全由用户确认 —— 规格书第十四点五节
+                        _saveState.value = SaveState.AwaitingMergeDecision(outcome.suggestion)
+                    }
+
+                    is RecognitionExecutor.PersistOutcome.Created -> {
+                        _saveState.value = SaveState.SavedAnalysisPending(outcome.plantId)
+                        startBackgroundAnalysis(outcome.plantId)
+                    }
+
+                    is RecognitionExecutor.PersistOutcome.AttachedToExisting -> {
+                        _saveState.value = SaveState.SavedWithAnalysis(outcome.plantId)
+                    }
+                }
             }
+            .onFailure { error ->
+                _saveState.value = SaveState.Failed(error.message ?: "保存失败，请重试")
+            }
+    }
 
-        // ---- 第二步：立刻结束本页流程。用户可以马上离开去看档案
-        _saveState.value = SaveState.SavedAnalysisPending(plantId)
-
-        // ---- 第三步：分析交给应用级作用域。
-        //
-        // 用 externalScope 而不是 viewModelScope 是**必须的**：
-        // 界面收到 SavedAnalysisPending 后会 navigate(plantDetail) 并把本页
-        // 从回退栈移除，本 ViewModel 随即销毁 —— viewModelScope 里的协程
-        // 会在那一刻被取消，百科永远生成不出来，而且不会有任何报错。
+    /**
+     * 把文字分析丢到应用级作用域。
+     *
+     * 用 [externalScope] 而不是 `viewModelScope` 是**必须的**：
+     * 界面收到 `SavedAnalysisPending` 后会 `navigate(plantDetail)` 并把本页
+     * 从回退栈移除，本 ViewModel 随即销毁 —— `viewModelScope` 里的协程
+     * 会在那一刻被取消，百科永远生成不出来，而且不会有任何报错。
+     */
+    private fun startBackgroundAnalysis(plantId: Long) {
+        val result = (_state.value as? RecognitionUiState.Success)?.response?.result
         externalScope.launch {
             val outcome = analysisRunner.run(
                 plantId = plantId,
                 result = result,
-                plantName = result.name,
+                plantName = result?.name,
                 place = placeHint,
             )
             // 此时页面多半已经不在，这个赋值没人看 —— 保留它只是为了
@@ -397,11 +358,7 @@ class RecognitionViewModel(
     companion object {
         fun factory(
             draftStore: CaptureDraftStore,
-            imageStore: ImageStore,
-            imageCompressor: ImageCompressor,
-            aiSettingsStore: AiSettingsStore,
-            locationSettingsStore: LocationSettingsStore,
-            visionProvider: VisionProvider,
+            executor: RecognitionExecutor,
             repository: PlantRepository,
             analysisRunner: AnalysisRunner,
             externalScope: CoroutineScope,
@@ -409,11 +366,7 @@ class RecognitionViewModel(
             initializer {
                 RecognitionViewModel(
                     draftStore = draftStore,
-                    imageStore = imageStore,
-                    imageCompressor = imageCompressor,
-                    aiSettingsStore = aiSettingsStore,
-                    locationSettingsStore = locationSettingsStore,
-                    visionProvider = visionProvider,
+                    executor = executor,
                     repository = repository,
                     analysisRunner = analysisRunner,
                     externalScope = externalScope,
