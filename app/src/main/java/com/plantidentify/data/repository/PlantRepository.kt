@@ -672,6 +672,143 @@ class PlantRepository(
         Unit
     }
 
+    // ---------------- 任务队列（Phase 8）----------------
+
+    /** 任务照片的轻量引用 —— 只带落库需要的两个字段，避免把实体带出数据层 */
+    data class TaskImageRef(val relativePath: String, val role: ImageRole)
+
+    /** 任务落库的结果：写到了哪个档案、哪条观察、是不是后台自动挂靠 */
+    data class TaskPersisted(
+        val plantId: Long,
+        val observationId: Long,
+        /**
+         * true = 后台命中候选档案、**自动挂靠**到了它名下（方案 §6.2）。
+         *
+         * 后台没有用户在场，弹不出归并确认框；而照片已经识别完，
+         * 用户显然希望它进档案。挂到候选档案下是**可撤销**的
+         * （任务列表上提供「拆分为新档案」），比堆在「未归类」角落里更符合预期。
+         * 挂靠时目标档案的文字内容一律不动，只把候选信息写进任务的
+         * `pendingMerge*` 三字段等用户裁决。
+         */
+        val attachedToExisting: Boolean,
+    )
+
+    /**
+     * 任务队列专用的落库。
+     *
+     * 与 [saveAsNewPlant] / [appendObservation] 的关键差别：
+     * 照片**来自任务表而不是拍摄草稿**。后台任务没有草稿
+     * （草稿是「添加植物」页面的单例，批量任务若共用它，前一个任务
+     * 保存时 `draftStore.clear()` 会把后面任务的照片引用全清掉），
+     * 所以照片引用由调用方从 `recognition_task_image` 读出来传进来。
+     *
+     * 同样**不碰草稿**：任务落库后由 Worker 清任务图片行，草稿完全无关。
+     *
+     * @param attachToPlantId 非空 = 挂靠到该档案下作为新观察（后台自动挂靠）
+     */
+    suspend fun persistTaskResult(
+        result: RecognitionResult,
+        rawAiJson: String,
+        images: List<TaskImageRef>,
+        attachToPlantId: Long? = null,
+    ): Result<TaskPersisted> = runCatching {
+        require(images.isNotEmpty()) { "任务没有照片" }
+
+        val existing = attachToPlantId?.let { id ->
+            plantRecordDao.getById(id) ?: error("目标植物档案不存在")
+        }
+
+        val now = System.currentTimeMillis()
+
+        val persisted = database.withTransaction {
+            if (existing != null) {
+                val observationId = insertObservationRecord(
+                    plantId = existing.id,
+                    timestamp = now,
+                    isPrimary = false,
+                    rawAiJson = rawAiJson,
+                    latitude = null,
+                    longitude = null,
+                    locationName = null,
+                )
+                insertImagesByRef(observationId, images)
+                // 与 appendObservation 一致：置信度跟随最近一次识别，文字内容不动
+                plantRecordDao.update(existing.copy(confidence = result.confidence, updatedAt = now))
+                TaskPersisted(existing.id, observationId, attachedToExisting = true)
+            } else {
+                val plantId = plantRecordDao.insert(
+                    PlantRecordEntity(
+                        name = result.name,
+                        latinName = result.latinName,
+                        family = result.family,
+                        genus = result.genus,
+                        category = result.category,
+                        confidence = result.confidence,
+                        analysisStatus = AnalysisStatus.NOT_REQUESTED,
+                        createdAt = now,
+                        updatedAt = now,
+                    ),
+                )
+                val observationId = insertObservationRecord(
+                    plantId = plantId,
+                    timestamp = now,
+                    isPrimary = true,
+                    rawAiJson = rawAiJson,
+                    latitude = null,
+                    longitude = null,
+                    locationName = null,
+                )
+                insertImagesByRef(observationId, images)
+                TaskPersisted(plantId, observationId, attachedToExisting = false)
+            }
+        }
+
+        persisted
+    }
+
+    /**
+     * 任务落库用的观察写入：地点数据被拆成三个可空字段。
+     *
+     * 任务表（方案 §3.1）不携带地点 —— 批量任务的来源是「提前拍好的一批照片」，
+     * 拍摄时的坐标不在任务里。等将来任务编辑页支持补充地点时，
+     * 把三件套加进任务表再传到这里，观察行结构与现在完全兼容。
+     */
+    private suspend fun insertObservationRecord(
+        plantId: Long,
+        timestamp: Long,
+        isPrimary: Boolean,
+        rawAiJson: String,
+        latitude: Double?,
+        longitude: Double?,
+        locationName: String?,
+    ): Long = observationDao.insert(
+        PlantObservationEntity(
+            plantId = plantId,
+            timestamp = timestamp,
+            latitude = latitude,
+            longitude = longitude,
+            locationName = locationName,
+            aiResultJson = rawAiJson,
+            isPrimary = isPrimary,
+        ),
+    )
+
+    private suspend fun insertImagesByRef(
+        observationId: Long,
+        images: List<TaskImageRef>,
+    ) {
+        imageDao.insertAll(
+            images.mapIndexed { index, ref ->
+                ObservationImageEntity(
+                    observationId = observationId,
+                    imagePath = ref.relativePath,
+                    role = ref.role,
+                    sortOrder = index,
+                )
+            },
+        )
+    }
+
     // ---------------- 内部 ----------------
 
     /**

@@ -1,5 +1,6 @@
 package com.plantidentify.data.recognition
 
+import androidx.work.ListenableWorker
 import com.plantidentify.data.ai.AiFailure
 import com.plantidentify.data.ai.AiSettingsStore
 import com.plantidentify.data.ai.RecognitionResult
@@ -10,6 +11,8 @@ import com.plantidentify.data.ai.VisionRequest
 import com.plantidentify.data.ai.VisionResponse
 import com.plantidentify.data.draft.CaptureDraft
 import com.plantidentify.data.image.ImageCompressor
+import com.plantidentify.data.local.PlantIdentifyDatabase
+import com.plantidentify.data.local.entity.RecognitionTaskStatus
 import com.plantidentify.data.location.LocationSettingsStore
 import com.plantidentify.data.location.aiPlaceHint
 import com.plantidentify.data.repository.PlantRepository
@@ -47,7 +50,21 @@ class RecognitionExecutor(
     private val imageStore: ImageStore,
     private val repository: PlantRepository,
     private val locationSettingsStore: LocationSettingsStore,
+    /**
+     * 直接持有数据库 —— `runTask` 要操作任务表本身（改状态、迁图片行），
+     * 那些写法与「档案仓库」的职责是两回事，硬塞进 PlantRepository
+     * 会让它同时对两套生命周期负责。
+     */
+    private val database: PlantIdentifyDatabase,
+    /** 后台百科也走同一个执行体 —— 它内部自己处理失败，绝不抛 */
+    private val analysisRunner: AnalysisRunner,
 ) {
+
+    private val taskDao = database.recognitionTaskDao()
+    private val taskImageDao = database.recognitionTaskImageDao()
+
+    /** 后台任务的自动重试上限。再往上就该让用户看见失败、自己决定要不要再试 */
+    private val maxAttempts = 3
 
     // ------------------------------------------------------------------
     // 视觉识别
@@ -259,6 +276,153 @@ class RecognitionExecutor(
         result = result,
         rawAiJson = rawAiJson,
     )
+
+    // ------------------------------------------------------------------
+    // 后台任务（Worker 调用）
+    // ------------------------------------------------------------------
+
+    /**
+     * 跑一条后台识别任务。
+     *
+     * 流水线（方案 §5.3）：
+     * ```
+     * 读任务 → 压缩 → 视觉识别 → 落库（新建 or 挂已有）→ 迁图片行 → 后台百科 → 完成
+     * ```
+     *
+     * ## 与立即识别共用哪些、不共用哪些
+     *
+     * - **共用**：压缩（同一个 `ImageCompressor`，缓存命中秒过）、
+     *   视觉请求组装、`AnalysisRunner`。不存在第二份 prompt。
+     * - **不共用**：照片来源（任务表 vs 草稿）与归并策略
+     *   （后台自动挂靠 vs 界面弹框）—— 这两点本来就是两个场景的差异，
+     *   硬抽到一起反而要塞一堆 if。
+     *
+     * @param attempt WorkManager 的 `runAttemptCount`，用于重试上限判断与回写展示
+     */
+    suspend fun runTask(taskId: Long, attempt: Int): ListenableWorker.Result {
+        val task = taskDao.getById(taskId)
+            ?: // 行没了（被用户删掉）：没有可更新的东西，直接让 work 结束
+            return ListenableWorker.Result.failure()
+        // 幂等退出：已取消 / 已完成的任务被重复调度时（比如 REPLACE 时机重叠），
+        // 绝不能再跑一遍 —— 会产出第二份档案
+        if (task.status.isTerminal) return ListenableWorker.Result.success()
+
+        val taskImages = taskImageDao.getByTask(taskId)
+        if (taskImages.isEmpty()) {
+            taskDao.markFinishedWithError(
+                taskId, RecognitionTaskStatus.FAILED,
+                System.currentTimeMillis(), "任务没有照片", attempt,
+            )
+            return ListenableWorker.Result.failure()
+        }
+
+        taskDao.markStarted(taskId, RecognitionTaskStatus.PROCESSING, System.currentTimeMillis())
+
+        // ① 压缩。逐张串行 —— ImageCompressor 有缓存，重试时秒过
+        val visionImages = taskImages.mapNotNull { image ->
+            imageCompressor
+                .compressedFor(imageStore.resolve(image.imagePath))
+                .getOrNull()
+                ?.let { file -> VisionImage(file = file, role = image.role) }
+        }
+        if (visionImages.isEmpty()) {
+            return finishWithError(taskId, attempt, "照片读取失败，原图可能已被清理")
+        }
+
+        // ② 地点弱先验。任务表不携带地点（见 PlantRepository.persistTaskResult 的注释），
+        //    开关开着也没有坐标可给 —— 传 null，prompt 里不会出现地点段
+        val place: String? = null
+
+        // ③ 视觉识别
+        val config = aiSettingsStore.current()
+        if (!config.vision.isUsable) {
+            // 没配好属于「怎么重试都不会好」的问题，不烧重试额度
+            return finishWithError(taskId, attempt, "尚未配置视觉识别模型，请先在设置里完成配置")
+        }
+
+        val vision = visionProvider.recognize(
+            VisionRequest(
+                images = visionImages,
+                config = config.vision,
+                strategy = config.promptStrategy,
+                place = place,
+            ),
+        )
+        val result = when (vision) {
+            is VisionCallResult.Success -> vision.response.result
+                ?: return finishWithError(taskId, attempt, "服务返回的内容无法解析出识别结果")
+            is VisionCallResult.Failure -> return handleFailure(taskId, attempt, vision.failure)
+        }
+
+        // ④ 落库。命中候选 → 后台自动挂靠（可撤销），否则新建
+        val suggestion = repository.findMergeSuggestion(result)
+        val persisted = repository.persistTaskResult(
+            result = result,
+            rawAiJson = vision.response.rawText,
+            images = taskImages.map { PlantRepository.TaskImageRef(it.imagePath, it.role) },
+            attachToPlantId = suggestion.plant?.id,
+        )
+
+        val saved = persisted.getOrElse { error ->
+            return finishWithError(taskId, attempt, error.message ?: "保存识别结果失败")
+        }
+        if (saved.attachedToExisting) {
+            taskDao.setPendingMerge(
+                taskId,
+                plantId = saved.plantId,
+                level = suggestion.level.name,
+                reason = suggestion.reason,
+            )
+        }
+
+        // 图片行迁完了（文件已归属 observation_image，路径没变）——只删行。
+        // **不能删文件**：文件现在属于正式档案，删了档案里的照片就空白了
+        taskImageDao.deleteByTask(taskId)
+
+        // ⑤ 先让「完成」在列表上可见，再跑可能更慢的百科。
+        // AnalysisRunner 内部自己落 SUCCEEDED/FAILED 状态、绝不抛 ——
+        // 所以这里不需要再包一层 try
+        analysisRunner.run(
+            plantId = saved.plantId,
+            result = result,
+            plantName = result.name,
+            place = place,
+        )
+
+        taskDao.markCompleted(
+            taskId, RecognitionTaskStatus.COMPLETED,
+            System.currentTimeMillis(), saved.observationId,
+        )
+        return ListenableWorker.Result.success()
+    }
+
+    /** 失败收尾：按可重试性决定 `Result.retry()` 还是终态失败 */
+    private suspend fun handleFailure(
+        taskId: Long,
+        attempt: Int,
+        failure: AiFailure,
+    ): ListenableWorker.Result {
+        val retryable = failure.canRetry && failure !is AiFailure.InvalidResponse
+        if (retryable && attempt + 1 < maxAttempts) {
+            // 退回 QUEUED：让列表显示「排队中」而不是「处理中」——
+            // 此时并没有人真的在跑它，下一次开跑还会重新 markStarted
+            taskDao.markQueued(taskId, RecognitionTaskStatus.QUEUED)
+            return ListenableWorker.Result.retry()
+        }
+        return finishWithError(taskId, attempt, failure.userMessage)
+    }
+
+    private suspend fun finishWithError(
+        taskId: Long,
+        attempt: Int,
+        message: String,
+    ): ListenableWorker.Result {
+        taskDao.markFinishedWithError(
+            taskId, RecognitionTaskStatus.FAILED,
+            System.currentTimeMillis(), message, attempt,
+        )
+        return ListenableWorker.Result.failure()
+    }
 }
 
 /**

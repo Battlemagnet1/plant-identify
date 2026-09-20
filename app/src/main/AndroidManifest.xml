@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!--
         权限说明（对应规格书第十八、二十三节）：
@@ -76,6 +77,30 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!--
+            Phase 8：识别任务队列。
+
+            WorkManager 默认经 androidx.startup 的 InitializationProvider 自动初始化，
+            那条路径用的是它自己的默认配置（多线程 Executor）—— 我们要求
+            识别任务**并发 1**（同一时刻只跑一个任务，避免同时烧两家服务的额度），
+            所以必须关掉默认初始化，改由 PlantIdentifyApplication 的
+            Configuration.Provider 提供单线程 Executor。
+
+            注意只移除 WorkManagerInitializer，startup 框架本身还要服务
+            其它库（如 Lifecycle）—— 用 tools:node="remove" 精确摘除一个 meta-data，
+            而不是禁用整个 provider。
+        -->
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            android:exported="false"
+            tools:node="merge">
+            <meta-data
+                android:name="androidx.work.WorkManagerInitializer"
+                android:value="androidx.startup"
+                tools:node="remove" />
+        </provider>
 
         <!--
             Phase 6：把导出的 HTML 与备份包分享出去。

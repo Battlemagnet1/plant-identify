@@ -2,7 +2,10 @@ package com.plantidentify
 
 import android.app.Application
 import android.content.Context
+import android.util.Log
 import androidx.room.Room
+import androidx.work.Configuration
+import androidx.work.WorkManager
 import com.plantidentify.data.ai.AiSettingsStore
 import com.plantidentify.data.ai.ChatCompletionsClient
 import com.plantidentify.data.ai.OpenAICompatibleTextProvider
@@ -18,6 +21,7 @@ import com.plantidentify.data.local.Migrations
 import com.plantidentify.data.local.PlantIdentifyDatabase
 import com.plantidentify.data.recognition.AnalysisRunner
 import com.plantidentify.data.recognition.RecognitionExecutor
+import com.plantidentify.data.recognition.RecognitionQueue
 import com.plantidentify.data.location.LocationProvider
 import com.plantidentify.data.location.LocationSettingsStore
 import com.plantidentify.data.repository.PlantRepository
@@ -27,6 +31,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import okhttp3.OkHttpClient
+import java.util.concurrent.Executors
 
 /**
  * 应用入口。
@@ -36,7 +41,7 @@ import okhttp3.OkHttpClient
  * 它带来的构建复杂度（尤其在 AGP 9 + KSP2 这套较新的工具链上）。
  * 若后续 Repository 数量增长到需要管理生命周期的作用域，再评估引入。
  */
-class PlantIdentifyApplication : Application() {
+class PlantIdentifyApplication : Application(), Configuration.Provider {
 
     lateinit var container: AppContainer
         private set
@@ -49,7 +54,37 @@ class PlantIdentifyApplication : Application() {
         // **不吞异常** —— 详见 CrashLogger 的注释。放在容器之后，
         // 这样崩溃日志里能带上版本号与版本类型
         CrashLogger.install(this)
+
+        // 僵尸任务自愈（方案 §5.6）。内部自己用应用级作用域跑，不阻塞启动；
+        // WorkManager 尚未初始化也没关系 —— 首次 getInstance 触发的正是
+        // 下面这个 workManagerConfiguration
+        container.recognitionQueue.recoverOnStartup()
     }
+
+    /**
+     * WorkManager 自定义配置：**单线程 Executor = 识别任务并发 1**。
+     *
+     * 同一时刻只跑一个识别任务。理由：
+     *  1. 每个任务都是一次带图的网络请求，并发会把内存与带宽同时吃满；
+     *  2. 逐个跑让「第 N 个任务失败」的定位简单得多；
+     *  3. 服务端限流（429）在串行下几乎不会触发。
+     *
+     * ## 时序注意（方案 §5.6）
+     *
+     * `androidx.startup` 的 InitializationProvider 是 ContentProvider，
+     * 它的 onCreate 跑在 Application.onCreate **之前** —— 也就是说
+     * WorkManager 可能在 [container] 赋值之前就要读这个 getter。
+     * 所以 getter 里**只允许**创建 Executor 这种无副作用的东西，
+     * 绝不能碰 AppContainer（它的成员全是 by lazy，碰了就等于在
+     * ContentProvider 阶段触发整条依赖链的初始化）。
+     */
+    override val workManagerConfiguration: Configuration
+        get() = Configuration.Builder()
+            .setExecutor(
+                Executors.newSingleThreadExecutor { r -> Thread(r, "recognition-queue") },
+            )
+            .setMinimumLoggingLevel(if (BuildConfig.DEBUG) Log.DEBUG else Log.WARN)
+            .build()
 }
 
 /** 应用的依赖容器 —— 单例持有，生命周期与 Application 一致 */
@@ -188,6 +223,21 @@ class AppContainer(context: Context) {
             imageStore = imageStore,
             repository = plantRepository,
             locationSettingsStore = locationSettingsStore,
+            database = database,
+            analysisRunner = analysisRunner,
+        )
+    }
+
+    /**
+     * 识别任务队列 —— 任务行与 WorkManager 之间的唯一通道。
+     *
+     * 入队 / 重试 / 取消 / 启动自愈都从这走；界面状态一律读任务表。
+     */
+    val recognitionQueue: RecognitionQueue by lazy {
+        RecognitionQueue(
+            workManager = WorkManager.getInstance(appContext),
+            taskDao = database.recognitionTaskDao(),
+            applicationScope = applicationScope,
         )
     }
 
