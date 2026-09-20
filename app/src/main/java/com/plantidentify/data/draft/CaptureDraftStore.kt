@@ -95,6 +95,7 @@ class CaptureDraftStore(private val context: Context) {
                     put(FIELD_LONGITUDE, draft.longitude)
                 }
                 draft.locationName?.let { put(FIELD_LOCATION_NAME, it) }
+                if (draft.locationManual) put(FIELD_LOCATION_MANUAL, true)
             }
             .toString()
     }
@@ -127,6 +128,7 @@ class CaptureDraftStore(private val context: Context) {
                 longitude = root.optDouble(FIELD_LONGITUDE)
                     .takeIf { root.has(FIELD_LONGITUDE) && !it.isNaN() },
                 locationName = root.optString(FIELD_LOCATION_NAME).takeIf { it.isNotBlank() },
+                locationManual = root.optBoolean(FIELD_LOCATION_MANUAL, false),
             )
         }.getOrElse { error ->
             // 草稿损坏（例如升级过程中断导致写了一半）不应让应用崩溃
@@ -148,5 +150,6 @@ class CaptureDraftStore(private val context: Context) {
         const val FIELD_LATITUDE = "latitude"
         const val FIELD_LONGITUDE = "longitude"
         const val FIELD_LOCATION_NAME = "locationName"
+        const val FIELD_LOCATION_MANUAL = "locationManual"
     }
 }

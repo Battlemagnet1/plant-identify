@@ -197,6 +197,23 @@ interface RecognitionTaskDao {
     )
     suspend fun resetInFlightToPending(): Int
 
+    /**
+     * 终态且**早于 cutoff** 的任务。
+     *
+     * 自动清理（方案外的用户新增需求：任务完成后不用手动清）只挑这三类，
+     * 且**跳过待裁决**（`pendingMergePlantId IS NULL`）——
+     * 挂靠裁决信息只存在于任务行上，行没了用户就永远没机会「拆分」了。
+     */
+    @Query(
+        """
+        SELECT * FROM recognition_task
+        WHERE status IN ('COMPLETED', 'FAILED', 'CANCELLED')
+          AND pendingMergePlantId IS NULL
+          AND completedAt IS NOT NULL AND completedAt < :cutoff
+        """,
+    )
+    suspend fun getFinishedBefore(cutoff: Long): List<RecognitionTaskEntity>
+
     // ---------------- 计数 ----------------
 
     @Query("SELECT COUNT(*) FROM recognition_task WHERE status = :status")

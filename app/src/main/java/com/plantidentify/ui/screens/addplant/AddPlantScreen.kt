@@ -100,6 +100,7 @@ fun AddPlantScreen(
     onLocationPermissionDenied: () -> Unit,
     onLocationPermissionRequested: () -> Unit,
     onRetryLocation: () -> Unit,
+    onManualLocation: (String) -> Unit,
     onCaptureLocation: () -> Unit,
     onCapturedTempConsumed: () -> Unit,
     onImportUris: (List<Uri>) -> Unit,
@@ -227,6 +228,7 @@ fun AddPlantScreen(
                     LocationRow(
                         state = locationUi,
                         onAction = onRetryLocation,
+                        onManual = onManualLocation,
                     )
                 }
             }
@@ -350,32 +352,97 @@ fun AddPlantScreen(
  * 后者让用户无法判断到底是功能没开、还是定位坏了。
  */
 @Composable
-private fun LocationRow(state: LocationUiState, onAction: () -> Unit) {
+private fun LocationRow(
+    state: LocationUiState,
+    onAction: () -> Unit,
+    onManual: (String) -> Unit,
+) {
     val context = LocalContext.current
+    var showManualDialog by remember { mutableStateOf(false) }
+
     val (text, actionable) = when (state) {
         LocationUiState.Hidden -> return
         LocationUiState.NeedPermission -> "📍 未获得定位权限 · 点此授权" to true
         LocationUiState.Fetching -> "📍 正在获取地点…" to false
         LocationUiState.Unavailable -> "📍 未能获取位置 · 点此重试" to true
-        is LocationUiState.Ready -> "📍 ${state.text}" to true
+        is LocationUiState.Ready ->
+            (if (state.manual) "📍 ${state.text}（手动填写）" else "📍 ${state.text}") to true
     }
 
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .then(if (actionable) Modifier.clickable(onClick = onAction) else Modifier),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            text = text,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        // 「点此授权」在永久拒绝后是点了没反应的（系统不再弹框）。
-        // 补一个明确的去处，用户才知道还能怎么办
-        if (state == LocationUiState.NeedPermission) {
-            TextButton(onClick = { openAppSettings(context) }) { Text("去系统设置") }
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .then(if (actionable) Modifier.clickable(onClick = onAction) else Modifier),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = text,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+            )
+            // 「点此授权」在永久拒绝后是点了没反应的（系统不再弹框）。
+            // 补一个明确的去处，用户才知道还能怎么办
+            if (state == LocationUiState.NeedPermission) {
+                TextButton(onClick = { openAppSettings(context) }) { Text("去系统设置") }
+            }
         }
+
+        // 两个常驻操作：定位不准就重取，定位不了/想改口就说地点。
+        // 常驻而不是只在失败时出现 —— 「定位成功了但定到了隔壁街」
+        // 和「定位失败」同样需要出口，前者更隐蔽也更常见
+        when (state) {
+            is LocationUiState.Ready, LocationUiState.Unavailable,
+            LocationUiState.NeedPermission,
+            -> {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                ) {
+                    TextButton(onClick = onAction) { Text("重新定位") }
+                    TextButton(onClick = { showManualDialog = true }) { Text("手动填写") }
+                }
+            }
+
+            else -> Unit
+        }
+    }
+
+    if (showManualDialog) {
+        var manualText by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { showManualDialog = false },
+            title = { Text("手动填写地点") },
+            text = {
+                Column {
+                    Text(
+                        text = "写下这个观察的具体地点，例如「人民公园东门第三棵」。将不记录经纬度。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    androidx.compose.material3.OutlinedTextField(
+                        value = manualText,
+                        onValueChange = { manualText = it },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onManual(manualText)
+                        showManualDialog = false
+                    },
+                    enabled = manualText.isNotBlank(),
+                ) { Text("确定") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showManualDialog = false }) { Text("取消") }
+            },
+        )
     }
 }
 

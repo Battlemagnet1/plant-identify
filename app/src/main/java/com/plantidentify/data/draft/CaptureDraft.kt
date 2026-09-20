@@ -72,6 +72,16 @@ data class CaptureDraft(
 
     /** 反向地理编码结果，可能为 null（国内 ROM 上失败很常见） */
     val locationName: String? = null,
+
+    /**
+     * 地点是否为**用户手动填写**。
+     *
+     * 手动值是用户明确给出的信息，自动定位不得静默覆盖它 ——
+     * 「重新定位」是用户主动点的按钮，点了才允许覆盖（并重置本标记）。
+     * 手动填写时坐标为 null：用户给的是地名，不是坐标，
+     * 观察行照样保存（三个字段都可空），只是没有经纬度可记。
+     */
+    val locationManual: Boolean = false,
 ) {
     val count: Int get() = images.size
 

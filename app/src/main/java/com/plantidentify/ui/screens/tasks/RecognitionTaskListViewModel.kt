@@ -64,6 +64,13 @@ class RecognitionTaskListViewModel(
         }
     }
 
+    fun delete(taskId: Long) {
+        viewModelScope.launch {
+            queue.delete(taskId)
+            _message.value = "任务已删除"
+        }
+    }
+
     fun resolveMerge(taskId: Long, keepAsNew: Boolean) {
         viewModelScope.launch {
             queue.resolveMerge(taskId, keepAsNew)

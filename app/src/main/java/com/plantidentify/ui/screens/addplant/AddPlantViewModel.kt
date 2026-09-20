@@ -144,6 +144,10 @@ class AddPlantViewModel(
     ) { choice, draft, fetching, failed ->
         when {
             !choice.enabled -> LocationUiState.Hidden
+            // 手动填写的地名不依赖定位权限 —— 用户给的是文字，不是坐标，
+            // 没授权也照样能填（自动定位才需要权限）
+            draft.locationManual && draft.locationName != null ->
+                LocationUiState.Ready(draft.locationName, manual = true)
             !locationProvider.hasPermission() -> LocationUiState.NeedPermission
             else -> placeText(draft.locationName, draft.latitude, draft.longitude)
                 ?.let { LocationUiState.Ready(it) }
@@ -211,16 +215,70 @@ class AddPlantViewModel(
                 _locationFailed.value = true
                 return@launch
             }
-            // 地理编码可能失败（国内 ROM 上很常见），失败就不写地名，只留坐标
+            // 地理编码可能失败（国内 ROM 上很常见），失败就不写地名，只留坐标。
+            // 自动定位的结果覆盖一切手动值 —— 「重新定位」是用户主动点的，
+            // 点了就意味着要用新定位换掉旧值
             val name = locationProvider.reverseGeocode(coordinate)
             draftStore.update { draft ->
                 draft.copy(
                     latitude = coordinate.latitude,
                     longitude = coordinate.longitude,
                     locationName = name,
+                    locationManual = false,
                 )
             }
             _fetchingLocation.value = false
+        }
+    }
+
+    /**
+     * 用户手动填写地点。
+     *
+     * ## 为什么手动值要单独标记，而不是与自动定位一视同仁
+     *
+     * 用户给的地名是他**知道且确认**的信息（比如「单位门口第三棵」），
+     * 而自动定位是尽力而为的猜测。两者冲突时必须以手动为准 ——
+     * 如果下次自动定位悄悄覆盖了手填值，用户会觉得自己填的东西丢了。
+     * 所以标记 [CaptureDraft.locationManual]，自动定位只重置它、不覆盖它；
+     * 想换回定位结果，用户明确点「重新定位」即可。
+     *
+     * 手动填写只给地名、不给坐标：我们没有能力把任意文字反解成经纬度
+     * （正向地理编码在国内 ROM 上比反向更不可靠），观察行照样保存
+     * （三字段都可空），只是没有坐标。
+     */
+    fun setLocationManually(name: String) {
+        val trimmed = name.trim()
+        if (trimmed.isEmpty()) return
+        externalScope.launch {
+            draftStore.update { draft ->
+                draft.copy(
+                    locationName = trimmed,
+                    latitude = null,
+                    longitude = null,
+                    locationManual = true,
+                )
+            }
+            _locationFailed.value = false
+        }
+    }
+
+    /**
+     * 清掉手动地点，回到「自动定位」的口径（界面上撤销手填值的入口）。
+     *
+     * 暂未在界面上挂按钮 —— 「重新定位」本身就会覆盖手动值；
+     * 留着这个纯数据操作，等用户反馈需要「只清地点不重新定位」时再接。
+     */
+    fun clearManualLocation() {
+        externalScope.launch {
+            draftStore.update { draft ->
+                if (!draft.locationManual) return@update draft
+                draft.copy(
+                    locationName = null,
+                    latitude = null,
+                    longitude = null,
+                    locationManual = false,
+                )
+            }
         }
     }
 
@@ -461,6 +519,6 @@ sealed interface LocationUiState {
     /** 有权限但拿不到点（没开 GPS / 室内无信号 / 超时） */
     data object Unavailable : LocationUiState
 
-    /** 已拿到 —— [text] 是地名，地名缺失时是经纬度 */
-    data class Ready(val text: String) : LocationUiState
+    /** 已拿到 —— [text] 是地名，地名缺失时是经纬度；[manual] = 用户手动填写 */
+    data class Ready(val text: String, val manual: Boolean = false) : LocationUiState
 }

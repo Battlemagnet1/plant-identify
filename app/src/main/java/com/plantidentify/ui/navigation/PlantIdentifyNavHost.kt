@@ -118,6 +118,7 @@ fun PlantIdentifyNavHost(
                 onLocationPermissionDenied = addPlantViewModel::onLocationPermissionDenied,
                 onLocationPermissionRequested = addPlantViewModel::consumeLocationPermissionRequest,
                 onRetryLocation = addPlantViewModel::retryLocation,
+                onManualLocation = addPlantViewModel::setLocationManually,
                 onCaptureLocation = addPlantViewModel::captureLocation,
                 onCapturedTempConsumed = {
                     backStackEntry.savedStateHandle.remove<String>(Routes.KEY_CAPTURED_TEMP_PATH)

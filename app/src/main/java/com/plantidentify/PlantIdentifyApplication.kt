@@ -59,6 +59,8 @@ class PlantIdentifyApplication : Application(), Configuration.Provider {
         // WorkManager 尚未初始化也没关系 —— 首次 getInstance 触发的正是
         // 下面这个 workManagerConfiguration
         container.recognitionQueue.recoverOnStartup()
+        // 终态超过一天的识别任务自动清掉（用户要求：完成任务不用手动清）
+        container.recognitionQueue.purgeOldFinished()
     }
 
     /**
@@ -236,8 +238,7 @@ class AppContainer(context: Context) {
     val recognitionQueue: RecognitionQueue by lazy {
         RecognitionQueue(
             workManager = WorkManager.getInstance(appContext),
-            taskDao = database.recognitionTaskDao(),
-            taskImageDao = database.recognitionTaskImageDao(),
+            database = database,
             imageStore = imageStore,
             repository = plantRepository,
             applicationScope = applicationScope,

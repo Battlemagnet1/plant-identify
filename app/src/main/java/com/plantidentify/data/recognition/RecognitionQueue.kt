@@ -10,8 +10,6 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import androidx.work.workDataOf
-import com.plantidentify.data.local.dao.RecognitionTaskDao
-import com.plantidentify.data.local.dao.RecognitionTaskImageDao
 import com.plantidentify.data.local.entity.ImageRole
 import com.plantidentify.data.local.entity.RecognitionTaskEntity
 import com.plantidentify.data.local.entity.RecognitionTaskStatus
@@ -24,6 +22,9 @@ import java.util.concurrent.TimeUnit
 
 /** 与「添加植物」一致的每任务照片上限：超过 5 张，边际收益撑不起上传体积 */
 const val MAX_IMAGES = 5
+
+/** 终态任务保留多久后自动清理（用户要求「完成即清」，折中为保留一天） */
+const val AUTO_PURGE_AGE_MS: Long = 24 * 60 * 60 * 1000L
 
 /**
  * 识别任务队列 —— 任务与 WorkManager 之间的唯一通道。
@@ -45,12 +46,15 @@ const val MAX_IMAGES = 5
  */
 class RecognitionQueue(
     private val workManager: WorkManager,
-    private val taskDao: RecognitionTaskDao,
-    private val taskImageDao: RecognitionTaskImageDao,
+    private val database: com.plantidentify.data.local.PlantIdentifyDatabase,
     private val imageStore: ImageStore,
     private val repository: com.plantidentify.data.repository.PlantRepository,
     private val applicationScope: CoroutineScope,
 ) {
+
+    private val taskDao = database.recognitionTaskDao()
+    private val taskImageDao = database.recognitionTaskImageDao()
+    private val observationImageDao = database.observationImageDao()
 
     /** 任务列表（投影行，含封面与张数），界面唯一的数据源 */
     fun observeTaskCards() = taskDao.observeTaskCards()
@@ -245,6 +249,58 @@ class RecognitionQueue(
 
                     else -> Unit
                 }
+            }
+        }
+    }
+
+    // ---------------- 删除（用户新增需求：任务完成后可清掉）----------------
+
+    /**
+     * 删除一条任务。
+     *
+     * 非终态先走 [cancel] —— 用户点「删除」时不会先去想「要不要先取消」，
+     * 一个按钮就该把整件事做完。行删除靠 [cancel] 的幂等闸门兜底：
+     * Worker 随后无论跑到哪一步，看到行没了都会安全退出。
+     *
+     * 文件清理走**引用计数**：失败的任务照片仍留在任务表里，
+     * 同一张图也可能被观察与任务同时引用 —— 数到 0 才能删文件。
+     */
+    suspend fun delete(taskId: Long) {
+        val task = taskDao.getById(taskId) ?: return
+        if (!task.status.isTerminal) cancel(taskId)
+
+        for (path in taskImageDao.getByTask(taskId).map { it.imagePath }) {
+            if (observationImageDao.countByPath(path) == 0 &&
+                taskImageDao.countByPath(path) <= 1
+            ) {
+                imageStore.delete(path)
+            }
+        }
+        taskImageDao.deleteByTask(taskId)
+        taskDao.deleteById(taskId)
+    }
+
+    /**
+     * 自动清理：终态超过 [maxAgeMs] 的任务在启动时清掉。
+     *
+     * 用户要的是「任务完成了不用手动清」；但立刻消失也有代价 ——
+     * 失败原因、重试按钮眨眼就没，用户点开列表时任务已经不见了。
+     * 折中成**保留 24 小时**：当天还能看结果/重试，第二天列表自己干净。
+     * 待裁决任务永远跳过（见 [RecognitionTaskDao.getFinishedBefore]）。
+     */
+    fun purgeOldFinished(maxAgeMs: Long = AUTO_PURGE_AGE_MS) {
+        applicationScope.launch {
+            for (task in taskDao.getFinishedBefore(System.currentTimeMillis() - maxAgeMs)) {
+                // 与 [delete] 相同的文件清理；待裁决已被查询排除
+                for (path in taskImageDao.getByTask(task.id).map { it.imagePath }) {
+                    if (observationImageDao.countByPath(path) == 0 &&
+                        taskImageDao.countByPath(path) <= 1
+                    ) {
+                        imageStore.delete(path)
+                    }
+                }
+                taskImageDao.deleteByTask(task.id)
+                taskDao.deleteById(task.id)
             }
         }
     }

@@ -75,6 +75,7 @@ fun RecognitionTaskListScreen(
     val snackbar = remember { SnackbarHostState() }
 
     var pendingCancel by remember { mutableStateOf<TaskCardRow?>(null) }
+    var pendingDelete by remember { mutableStateOf<TaskCardRow?>(null) }
 
     // 系统相册多选（与「添加植物」同一契约：≤5 张，视觉识别的边际收益在 5 张后归零）
     val picker = rememberLauncherForActivityResult(
@@ -171,6 +172,7 @@ fun RecognitionTaskListScreen(
                             imageStore = imageStore,
                             onRetry = { viewModel.retry(task.id) },
                             onCancel = { pendingCancel = task },
+                            onDelete = { pendingDelete = task },
                             onKeepExisting = { viewModel.resolveMerge(task.id, keepAsNew = false) },
                             onSplitNew = { viewModel.resolveMerge(task.id, keepAsNew = true) },
                             onOpenPlant = {
@@ -183,6 +185,31 @@ fun RecognitionTaskListScreen(
                 }
             }
         }
+    }
+
+    pendingDelete?.let { task ->
+        AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text("删除这条任务？") },
+            text = {
+                Text(
+                    if (task.status == RecognitionTaskStatus.COMPLETED) {
+                        "识别结果已经写入植物档案，删除任务只是清掉这条队列记录。"
+                    } else {
+                        "任务记录与其未使用的照片将被清除，已写入档案的结果不受影响。"
+                    },
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.delete(task.id)
+                    pendingDelete = null
+                }) { Text("删除") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDelete = null }) { Text("取消") }
+            },
+        )
     }
 
     pendingCancel?.let { task ->
@@ -221,6 +248,7 @@ private fun TaskCard(
     imageStore: ImageStore,
     onRetry: () -> Unit,
     onCancel: () -> Unit,
+    onDelete: () -> Unit,
     onKeepExisting: () -> Unit,
     onSplitNew: () -> Unit,
     onOpenPlant: () -> Unit,
@@ -315,6 +343,9 @@ private fun TaskCard(
                     (task.resultPlantId != null || task.pendingMergePlantId != null)
                 if (canOpen) {
                     OutlinedButton(onClick = onOpenPlant) { Text("查看档案") }
+                }
+                if (task.status.isTerminal) {
+                    TextButton(onClick = onDelete) { Text("删除") }
                 }
             }
         }
