@@ -48,9 +48,75 @@ object Migrations {
     }
 
     /**
+     * v2 → v3：新增「识别任务」两张表。
+     *
+     * 纯增量：不动任何既有表、不加列。老用户的档案在升级后原样可用，
+     * 只是多出两个空表 —— 这是迁移里风险最低的一种。
+     *
+     * ## 为什么这两张表要一起上
+     *
+     * `recognition_task_image` 有指向 `recognition_task` 的外键。
+     * 分两次迁移（先建主表、下个版本再建子表）在中间那个版本里会存在
+     * 「任务没有图片」的非法中间态，而任务的唯一用途就是装图片 ——
+     * 没有图片的任务是脏数据，不该能被表示出来。
+     *
+     * ## 列顺序与 NOT NULL 必须和 Room 生成的建表语句逐字一致
+     *
+     * 下面的 SQL 是手写的，Room 不会替我们校验。它比对的是
+     * **「列名集合 + 约束 + 索引」**，任何一处不符都会在**用户设备上**
+     * 抛 `Migration didn't properly handle`（构建期发现不了）。
+     * 写完必须拿构建产物 `schemas/3.json` 逐条核对，并按 §11.5 真机验证。
+     *
+     * 非空列（`status` / `createdAt` / `retryCount` / `priority` / `origin` /
+     * `taskId` / `imagePath` / `role` / `sortOrder`）在 Kotlin 侧都是非空类型，
+     * 所以 SQL 里**不能带默认值**、也不加 `NOT NULL DEFAULT`——
+     * Room 生成的建表语句对这类列就是裸的 `TEXT NOT NULL`。
+     */
+    val MIGRATION_2_3: Migration = object : Migration(2, 3) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `recognition_task` (" +
+                    "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                    "`status` TEXT NOT NULL, " +
+                    "`createdAt` INTEGER NOT NULL, " +
+                    "`startedAt` INTEGER, " +
+                    "`completedAt` INTEGER, " +
+                    "`retryCount` INTEGER NOT NULL, " +
+                    "`errorMessage` TEXT, " +
+                    "`resultObservationId` INTEGER, " +
+                    "`priority` INTEGER NOT NULL, " +
+                    "`origin` TEXT NOT NULL, " +
+                    "`code` TEXT, " +
+                    "`pendingMergePlantId` INTEGER, " +
+                    "`pendingMergeLevel` TEXT, " +
+                    "`pendingMergeReason` TEXT, " +
+                    "`note` TEXT)",
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_recognition_task_status` ON `recognition_task` (`status`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_recognition_task_createdAt` ON `recognition_task` (`createdAt`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_recognition_task_priority` ON `recognition_task` (`priority`)")
+
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `recognition_task_image` (" +
+                    "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                    "`taskId` INTEGER NOT NULL, " +
+                    "`imagePath` TEXT NOT NULL, " +
+                    "`role` TEXT NOT NULL, " +
+                    "`sortOrder` INTEGER NOT NULL, " +
+                    "FOREIGN KEY(`taskId`) REFERENCES `recognition_task`(`id`) " +
+                    "ON UPDATE NO ACTION ON DELETE CASCADE )",
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_recognition_task_image_taskId_sortOrder` " +
+                    "ON `recognition_task_image` (`taskId`, `sortOrder`)",
+            )
+        }
+    }
+
+    /**
      * 全部迁移，按版本升序。
      *
      * 顺序不能乱 —— Room 会从当前版本开始，逐个往上找能匹配起点的迁移。
      */
-    val ALL: Array<Migration> = arrayOf(MIGRATION_1_2)
+    val ALL: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3)
 }

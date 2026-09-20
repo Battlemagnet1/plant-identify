@@ -5,9 +5,13 @@ import androidx.room.RoomDatabase
 import com.plantidentify.data.local.dao.ObservationImageDao
 import com.plantidentify.data.local.dao.PlantObservationDao
 import com.plantidentify.data.local.dao.PlantRecordDao
+import com.plantidentify.data.local.dao.RecognitionTaskDao
+import com.plantidentify.data.local.dao.RecognitionTaskImageDao
 import com.plantidentify.data.local.entity.ObservationImageEntity
 import com.plantidentify.data.local.entity.PlantObservationEntity
 import com.plantidentify.data.local.entity.PlantRecordEntity
+import com.plantidentify.data.local.entity.RecognitionTaskEntity
+import com.plantidentify.data.local.entity.RecognitionTaskImageEntity
 
 /**
  * plant Identify 本地数据库。
@@ -33,8 +37,10 @@ import com.plantidentify.data.local.entity.PlantRecordEntity
         PlantRecordEntity::class,
         PlantObservationEntity::class,
         ObservationImageEntity::class,
+        RecognitionTaskEntity::class,
+        RecognitionTaskImageEntity::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = true,
 )
 abstract class PlantIdentifyDatabase : RoomDatabase() {
@@ -44,6 +50,17 @@ abstract class PlantIdentifyDatabase : RoomDatabase() {
     abstract fun plantObservationDao(): PlantObservationDao
 
     abstract fun observationImageDao(): ObservationImageDao
+
+    /**
+     * 识别任务队列（v3 新增）。
+     *
+     * 这两张表与档案表**没有外键往来** —— 任务照片在识别完成后是被
+     * 「搬」进档案的（行迁移），不是「指向」档案。这样删植物时
+     * 不会牵连任务，删任务也不会影响已归档的照片。
+     */
+    abstract fun recognitionTaskDao(): RecognitionTaskDao
+
+    abstract fun recognitionTaskImageDao(): RecognitionTaskImageDao
 
     companion object {
         const val NAME = "plant_identify.db"

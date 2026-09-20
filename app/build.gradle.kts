@@ -172,6 +172,12 @@ dependencies {
     implementation(platform(libs.okhttp.bom))
     implementation(libs.okhttp)
 
+    // --- Phase 8：识别任务队列 ---
+    // 约束（见方案 §5）：并发 1、不做前台服务、NetworkType.CONNECTED。
+    // 任务表与 WorkManager 的 WorkSpec 是一对一的：DB 是「真相来源」，
+    // WorkManager 只负责「什么时候跑」，UI 永远读 DB。
+    implementation(libs.androidx.work.runtime.ktx)
+
     debugImplementation(libs.compose.ui.tooling)
     debugImplementation(libs.compose.ui.test.manifest)
 

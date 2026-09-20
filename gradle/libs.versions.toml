@@ -35,6 +35,10 @@ datastore = "1.2.1"
 # 与本项目 AGP 内置的 Kotlin 2.2.10 同属 2.2 元数据版本，可直接使用。
 okhttp = "5.5.0"
 coroutines = "1.10.2"
+# WorkManager：方案 §5.1 指定的后台任务调度。已核实 Google Maven 元数据
+# （dl.google.com/android/maven2）上 2.11.2 是最新稳定版，2.12.0 尚在 rc。
+# 注意别用 Maven Central 查 androidx —— 它上面没有（返回 404）。
+work = "2.11.2"
 junit = "4.13.2"
 # org.json 官方实现（Maven Central）。JVM 单测必需 —— 见下方 libraries 里的说明
 orgJson = "20240303"
@@ -89,6 +93,9 @@ androidx-datastore-preferences = { group = "androidx.datastore", name = "datasto
 #   3. 少一个编译期代码生成插件，就少一处与 AGP 9 内置 Kotlin 冲突的可能
 okhttp-bom = { group = "com.squareup.okhttp3", name = "okhttp-bom", version.ref = "okhttp" }
 okhttp = { group = "com.squareup.okhttp3", name = "okhttp" }
+
+# --- 后台任务调度（Phase 2：识别任务队列）---
+androidx-work-runtime-ktx = { group = "androidx.work", name = "work-runtime-ktx", version.ref = "work" }
 
 # --- 测试 ---
 junit = { group = "junit", name = "junit", version.ref = "junit" }
