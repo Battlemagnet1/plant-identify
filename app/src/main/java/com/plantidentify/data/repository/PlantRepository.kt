@@ -4,6 +4,7 @@ import android.net.Uri
 import androidx.room.withTransaction
 import com.plantidentify.data.ai.PlantAnalysis
 import com.plantidentify.data.ai.RecognitionResult
+import com.plantidentify.data.ai.TolerantJsonParser
 import com.plantidentify.data.draft.CaptureDraft
 import com.plantidentify.data.draft.CaptureDraftStore
 import com.plantidentify.data.draft.DraftImage
@@ -765,6 +766,76 @@ class PlantRepository(
 
         persisted
     }
+
+    /**
+     * 用户裁决「确实是同一种」。
+     *
+     * 观察保持挂在目标档案下不动，只做两件轻量修正：
+     * 置信度取两边更高的、刷新档案的 `updatedAt`。
+     *
+     * **不并入俗称** —— 识别结果里没有俗称字段（方案 Phase 1 的刻意设计：
+     * 知识性字段只走文字分析通道），自然也无从并入。
+     */
+    suspend fun confirmTaskMerge(observationId: Long, plantId: Long): Result<Unit> = runCatching {
+        val observation = observationDao.getById(observationId)
+            ?: error("该观察记录不存在")
+        val target = plantRecordDao.getById(plantId)
+            ?: error("目标植物档案不存在")
+        val result = resultFromAiJson(observation.aiResultJson)
+
+        val now = System.currentTimeMillis()
+        plantRecordDao.update(
+            target.copy(
+                confidence = maxOf(target.confidence, result?.confidence ?: 0.0),
+                updatedAt = now,
+            ),
+        )
+    }
+
+    /**
+     * 用户裁决「这其实是新植物」：把该观察从目标档案上**拆**出来建独立档案。
+     *
+     * 新档案的字段从观察的 `aiResultJson` 反解析恢复 —— 那是识别落库时的原文，
+     * 足以重建 [RecognitionResult]。解析不出来就报错而不是硬拆：
+     * 拆出一个叫「未知」的空档案只会制造新的清洗问题。
+     */
+    suspend fun splitTaskToNewPlant(observationId: Long): Result<Long> = runCatching {
+        val observation = observationDao.getById(observationId)
+            ?: error("该观察记录不存在")
+        val result = resultFromAiJson(observation.aiResultJson)
+            ?: error("无法从识别结果恢复档案信息，拆分失败")
+
+        val now = System.currentTimeMillis()
+        database.withTransaction {
+            val newPlantId = plantRecordDao.insert(
+                PlantRecordEntity(
+                    name = result.name,
+                    latinName = result.latinName,
+                    family = result.family,
+                    genus = result.genus,
+                    category = result.category,
+                    confidence = result.confidence,
+                    analysisStatus = AnalysisStatus.NOT_REQUESTED,
+                    createdAt = now,
+                    updatedAt = now,
+                ),
+            )
+            observationDao.update(observation.copy(plantId = newPlantId))
+            // 拆出来的是这条观察自己的档案，它理应成为代表观察
+            observationDao.setPrimaryObservation(newPlantId, observationId)
+            newPlantId
+        }
+    }
+
+    /** 从观察的 `aiResultJson` 恢复识别结果；解析不出返回 null（含原文为空） */
+    private fun resultFromAiJson(raw: String?): RecognitionResult? =
+        raw?.takeIf { it.isNotBlank() }?.let { text ->
+            when (val attempt = TolerantJsonParser.parse(text)) {
+                is TolerantJsonParser.ParseAttempt.Success -> attempt.result
+                is TolerantJsonParser.ParseAttempt.Degraded -> attempt.result
+                is TolerantJsonParser.ParseAttempt.Failed -> null
+            }
+        }
 
     /**
      * 任务落库用的观察写入：地点数据被拆成三个可空字段。

@@ -1,5 +1,6 @@
 package com.plantidentify.ui.screens.home
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -54,6 +55,7 @@ fun HomeScreen(
     onOpenObservation: (Long) -> Unit,
     onOpenRecognition: () -> Unit,
     onOpenStats: () -> Unit,
+    onOpenTasks: () -> Unit,
     imageStore: ImageStore,
     viewModel: HomeViewModel,
     modifier: Modifier = Modifier,
@@ -118,6 +120,11 @@ fun HomeScreen(
             if (AppEdition.isFull) {
                 item(key = "stats", contentType = "entry") {
                     StatisticsCard(statistics, onClick = onOpenStats)
+                }
+                // 识别任务入口（Phase 8，完整版专属）。位置在搜索卡与统计卡之间
+                // 偏后 —— 批量识别是进阶动作，不让它挤占「拍一拍」的主路径
+                item(key = "tasks", contentType = "entry") {
+                    TasksEntry(onClick = onOpenTasks)
                 }
             }
 
@@ -342,6 +349,39 @@ private fun EmptyArchiveCard() {
                 // 一起发给用户，且与事实不符 —— 改成引导用户做第一步。
                 text = "点右下角「添加植物」拍几张同一株植物的照片，" +
                     "识别结果会自动整理成档案。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/**
+ * 「识别任务」入口卡（Phase 8，完整版专属）。
+ *
+ * 一句话讲清这个功能解决什么：照片不用当场等结果。
+ * 批量识别与现场调查都从这里进。
+ */
+@Composable
+private fun TasksEntry(onClick: () -> Unit) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+    ) {
+        Column(modifier = Modifier.padding(20.dp)) {
+            Text(
+                text = "识别任务",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Medium,
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = "把一批照片丢进队列，应用在后台逐个识别，结果自动写入档案 —— 不用停在页面里等。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

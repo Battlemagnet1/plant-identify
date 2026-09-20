@@ -32,4 +32,24 @@ data class TaskCardRow(
      * 用户调序之后封面要跟着换，否则「刚刚把这张挪到第一位」看起来没生效。
      */
     val coverPath: String?,
+
+    // ---- 「后台自动挂靠」的待裁决信息（方案 §6.2），非空 = 等用户处理 ----
+
+    val pendingMergePlantId: Long?,
+    val pendingMergeLevel: String?,
+    val pendingMergeReason: String?,
+
+    /** 失败原因（面向用户的一句话）；非失败状态为 null */
+    val errorMessage: String?,
+
+    /** 该任务产出的观察 id（尚未产出为 null） */
+    val resultObservationId: Long?,
+
+    /**
+     * 该任务产出结果所在的档案 id。
+     *
+     * 列表上的「查看档案」要用它导航；挂靠场景下它等于 pendingMergePlantId，
+     * 由子查询从观察行取，保证两种落库路径口径一致。
+     */
+    val resultPlantId: Long?,
 )

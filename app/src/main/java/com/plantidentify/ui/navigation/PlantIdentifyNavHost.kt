@@ -33,6 +33,8 @@ import com.plantidentify.ui.screens.settings.SettingsScreen
 import com.plantidentify.ui.screens.settings.SettingsViewModel
 import com.plantidentify.ui.screens.stats.StatsScreen
 import com.plantidentify.ui.screens.stats.StatsViewModel
+import com.plantidentify.ui.screens.tasks.RecognitionTaskListScreen
+import com.plantidentify.ui.screens.tasks.RecognitionTaskListViewModel
 
 /**
  * 导航图（规格书第二十七节）。
@@ -69,6 +71,7 @@ fun PlantIdentifyNavHost(
                 },
                 onOpenRecognition = { navController.navigateSingleTop(Routes.RECOGNITION) },
                 onOpenStats = { navController.navigateSingleTop(Routes.STATS) },
+                onOpenTasks = { navController.navigateSingleTop(Routes.TASK_LIST) },
                 imageStore = container.imageStore,
                 viewModel = homeViewModel,
             )
@@ -225,6 +228,24 @@ fun PlantIdentifyNavHost(
             DataManagementScreen(
                 onBack = navController::popBackStack,
                 viewModel = dataViewModel,
+            )
+        }
+
+        // 识别任务列表（Phase 8）。入口在首页且仅完整版可见（§9.4）——
+        // 路由本身不做版本判断，base 版不可达即可
+        composable(Routes.TASK_LIST) {
+            val taskListViewModel: RecognitionTaskListViewModel = viewModel(
+                factory = RecognitionTaskListViewModel.factory(
+                    queue = container.recognitionQueue,
+                ),
+            )
+            RecognitionTaskListScreen(
+                viewModel = taskListViewModel,
+                imageStore = container.imageStore,
+                onBack = navController::popBackStack,
+                onOpenPlantDetail = { plantId ->
+                    navController.navigateSingleTop(Routes.plantDetail(plantId))
+                },
             )
         }
 

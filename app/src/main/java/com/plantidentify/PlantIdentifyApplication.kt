@@ -237,6 +237,9 @@ class AppContainer(context: Context) {
         RecognitionQueue(
             workManager = WorkManager.getInstance(appContext),
             taskDao = database.recognitionTaskDao(),
+            taskImageDao = database.recognitionTaskImageDao(),
+            imageStore = imageStore,
+            repository = plantRepository,
             applicationScope = applicationScope,
         )
     }

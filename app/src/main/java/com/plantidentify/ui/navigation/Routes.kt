@@ -39,6 +39,14 @@ object Routes {
     /** 数据管理：位置记录 / 导出 HTML / 备份与恢复（Phase 6，规格书第二十一、二十二节） */
     const val DATA_MANAGEMENT = "data_management"
 
+    /**
+     * 识别任务列表（Phase 8，完整版专属入口）。
+     *
+     * 按方案 §9.4：**路由本身不做版本判断** —— base 版没有入口所以不可达，
+     * 业务逻辑与数据库两版完全一致（备份包可互相迁移）。
+     */
+    const val TASK_LIST = "tasks"
+
     private const val ARG_PLANT_ID = "plantId"
     private const val ARG_OBSERVATION_ID = "observationId"
 

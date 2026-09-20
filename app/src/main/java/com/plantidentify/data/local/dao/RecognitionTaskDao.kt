@@ -132,7 +132,14 @@ interface RecognitionTaskDao {
                t.code AS code,
                (SELECT COUNT(*) FROM recognition_task_image i WHERE i.taskId = t.id) AS imageCount,
                (SELECT i.imagePath FROM recognition_task_image i
-                 WHERE i.taskId = t.id ORDER BY i.sortOrder ASC LIMIT 1) AS coverPath
+                 WHERE i.taskId = t.id ORDER BY i.sortOrder ASC LIMIT 1) AS coverPath,
+               t.pendingMergePlantId AS pendingMergePlantId,
+               t.pendingMergeLevel AS pendingMergeLevel,
+               t.pendingMergeReason AS pendingMergeReason,
+               t.errorMessage AS errorMessage,
+               t.resultObservationId AS resultObservationId,
+               (SELECT o.plantId FROM plant_observation o
+                 WHERE o.id = t.resultObservationId) AS resultPlantId
         FROM recognition_task t
         ORDER BY t.createdAt DESC
         """,
