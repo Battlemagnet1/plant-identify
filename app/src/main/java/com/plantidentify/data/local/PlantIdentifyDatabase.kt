@@ -49,7 +49,7 @@ import com.plantidentify.data.local.entity.RecognitionTaskImageEntity
         ImageFingerprintEntity::class,
         CleaningStateEntity::class,
     ],
-    version = 5,
+    version = 7,
     exportSchema = true,
 )
 abstract class PlantIdentifyDatabase : RoomDatabase() {

@@ -69,6 +69,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -204,6 +205,49 @@ def build_analysis_content(mode: str) -> str:
     return json.dumps(ANALYSIS_RESULT, ensure_ascii=False)
 
 
+# 「数据清洗顾问」的 prompt 里每组以「### 候选 <id>」开头。
+# 把 id 抽出来，mock 才能**按组回答** —— 而不是不管问什么都回同一段，
+# 那样连「group_id 对得上」这件事都验证不了。
+CLEANING_GROUP_RE = re.compile(r"###\s*候选\s*(\d+)")
+
+CLEANING_MARKER = "待判定候选"
+
+
+def build_cleaning_content(mode: str, prompt: str) -> str:
+    """按清洗顾问 prompt 里的候选组生成结论。
+
+    四种模式覆盖了编排层需要区分的全部路径：
+      cleaningSame    全部判为同一株（→ 界面出现待合并）
+      cleaningNotSame 全部判为不同种（→ 自动结案，列表应清空）
+      cleaningAlias   全部判为「名称差异」（→ 自动结案，理由不同）
+      cleaningBad     返回非 JSON（→ 该批留待下次，aiUsed 必须仍为 0）
+    """
+    ids = CLEANING_GROUP_RE.findall(prompt)
+
+    if mode == "cleaningBad":
+        return "这些植物看起来可能是同一种，建议合并。"
+
+    results = []
+    for gid in ids:
+        if mode == "cleaningNotSame":
+            same, vtype, reason = False, "NOT_SAME", "拉丁学名与科属均不同"
+        elif mode == "cleaningAlias":
+            same, vtype, reason = False, "ALIAS_RELATION", "同一物种的常见异名写法"
+        else:
+            same, vtype, reason = True, "POSSIBLE_DUPLICATE", "拉丁学名一致，属于同一物种"
+        results.append(
+            {
+                "group_id": gid,
+                "type": vtype,
+                "is_same": same,
+                "confidence": 0.95 if same else 0.88,
+                "reason": reason,
+            }
+        )
+
+    return json.dumps({"results": results}, ensure_ascii=False)
+
+
 def build_content(mode: str) -> str:
     """按模式生成 content 字段。"""
     if mode == "ok":
@@ -256,6 +300,8 @@ KNOWN_MODES = (
     # 文字分析
     "analysisEmpty", "analysisBad", "analysisPartial", "analysisFenced",
     "analysisSnake",
+    # 数据清洗顾问
+    "cleaningSame", "cleaningNotSame", "cleaningAlias", "cleaningBad",
 )
 
 STATE = {"mode": "ok"}
@@ -462,9 +508,18 @@ class MockHandler(BaseHTTPRequestHandler):
         # ---- 成功响应
         # 不带图片的请求视为文字分析，带图的视为视觉识别。
         # 这样一个模式可以同时服务两条通道，不必在两套模式间来回切换。
-        content_text = (
-            build_analysis_content(mode) if len(images) == 0 else build_content(mode)
-        )
+        #
+        # 三条纯文本用途靠 prompt 内容区分：清洗顾问 / 百科分析。
+        # 用「prompt 里有没有这句话」来判，比再加一个『当前模式』开关稳 ——
+        # 开关会与实际请求脱节（切了开关但客户端没变），
+        # 而 prompt 是随请求一起到的，不可能对不上。
+        user_text = chr(10).join(t.get("text") or "" for t in texts)
+        if len(images) == 0 and CLEANING_MARKER in user_text:
+            content_text = build_cleaning_content(mode, user_text)
+        else:
+            content_text = (
+                build_analysis_content(mode) if len(images) == 0 else build_content(mode)
+            )
 
         payload = {
             "id": "chatcmpl-mock-0001",

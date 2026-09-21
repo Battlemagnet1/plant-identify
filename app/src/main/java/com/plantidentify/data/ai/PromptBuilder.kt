@@ -1,6 +1,7 @@
 package com.plantidentify.data.ai
 
 import com.plantidentify.data.local.entity.ImageRole
+import com.plantidentify.domain.cleaning.RecordSnapshot
 
 /**
  * 识别 prompt 的策略变体。
@@ -226,6 +227,139 @@ object PromptBuilder {
     fun buildConnectivityPrompt(): String =
         "请只回答一个 JSON 对象：{\"ok\": true, \"model_ack\": \"已收到图片\"}。" +
             "不要输出任何其他文字。"
+
+    // ---------------- 数据清洗顾问（Phase 3）----------------
+
+    /**
+     * 一次清洗请求里的一组候选。
+     *
+     * [issueId] 直接当 prompt 里的 `group_id` 用 —— 方案写的是 `001` 这样的
+     * 批次内序号，这里刻意改成 id：序号需要在下标与问题之间做一层映射，
+     * 一旦模型少返回一条（很常见），映射就整体错位，**把甲组的结论写到乙组上**。
+     * 用 id 则不存在错位的可能，模型只要原样回填即可。
+     */
+    data class CleaningGroup(
+        val issueId: Long,
+        val first: RecordSnapshot,
+        val second: RecordSnapshot,
+        /** 本地判据（如「中文名相似度 57%」），给模型一个起点 */
+        val localReason: String,
+    )
+
+    /**
+     * 构造「数据清洗顾问」的 prompt：一次问一批「这两株是不是同一种」。
+     *
+     * ## 为什么必须强调「名称相似不足以判定」
+     *
+     * 本地六级判定里 0.55–0.90 那一段是灰区 —— 它之所以是灰区，
+     * 正是因为**中文名的相似与同种之间没有稳定关系**：
+     * 「悬铃木 / 悬铃树」是一物异名，而「紫薇 / 紫荆」是两种完全不同的植物。
+     * 若不点明，模型很容易顺着本地判据（prompt 里给了相似度）直接附和。
+     */
+    fun buildCleaningPrompt(groups: List<CleaningGroup>): String = buildString {
+        appendLine(CLEANING_ADVISOR_ROLE)
+        appendLine()
+        appendLine(CLEANING_JUDGE_RULES)
+        appendLine()
+        appendLine(CLEANING_SCHEMA_SPEC)
+        appendLine()
+        appendLine("## 待判定候选（共 ${groups.size} 组）")
+        appendLine()
+        groups.forEach { group ->
+            appendLine("### 候选 ${group.issueId}")
+            appendLine("- 甲：${describe(group.first)}")
+            if (!group.first.description.isNullOrBlank()) {
+                appendLine("  简介：${truncate(group.first.description, DESCRIPTION_LIMIT)}")
+            }
+            appendLine("- 乙：${describe(group.second)}")
+            if (!group.second.description.isNullOrBlank()) {
+                appendLine("  简介：${truncate(group.second.description, DESCRIPTION_LIMIT)}")
+            }
+            appendLine("- 本地判据：${group.localReason}")
+            appendLine()
+        }
+    }
+
+    /**
+     * 一行描述：名称 / 学名 / 科 / 属 / 类型 / 置信度。
+     *
+     * 顺序不是随意的：从最可靠到最不可靠。模型对靠前的字段更愿意采信，
+     * 把「中文名」放在最前面会让它过度依赖名称。
+     */
+    private fun describe(record: RecordSnapshot): String = buildList {
+        add(record.name.ifBlank { "（无名称）" })
+        add(record.latinName?.takeIf { it.isNotBlank() } ?: "（无学名）")
+        add(record.family?.takeIf { it.isNotBlank() } ?: "（无科）")
+        add(record.genus?.takeIf { it.isNotBlank() } ?: "（无属）")
+        record.category?.takeIf { it.isNotBlank() }?.let { add(it) }
+        add("置信度 ${"%.2f".format(record.confidence)}")
+    }.joinToString(" / ")
+
+    /**
+     * 截断长文本。
+     *
+     * **在最后一个句读处截**而不是硬切：硬切可能把「不是同一种」这种
+     * 关键否定词切掉一半，留下「不是同一」—— 那比不截还糟。
+     */
+    private fun truncate(text: String, limit: Int): String {
+        if (text.length <= limit) return text
+        val head = text.take(limit)
+        val cut = head.indexOfLast { it in "。；;.\n" }
+        return if (cut > limit / 2) head.take(cut + 1) else "$head…"
+    }
+
+    /** 简介只截到 200 字：区分度集中在开头，结尾多是「园林用途」这类套话 */
+    private const val DESCRIPTION_LIMIT = 200
+
+    private val CLEANING_ADVISOR_ROLE = """
+        你是一位植物分类学助手。下面若干组植物档案被本地算法判为「可能重复」，
+        请逐组判断它们是不是**同一种植物**。
+    """.trimIndent()
+
+    private val CLEANING_JUDGE_RULES = """
+        ## 判断依据（可靠度从高到低）
+
+        1. **拉丁学名**（双名法）最可靠。相同、或只差拼写与作者引证 → 很可能是同一种
+        2. **科 + 属**一致说明是近亲，但**不能**说明是同一种（同属几十个种很常见）
+        3. **中文名**：俗称、异名、地区名极多，**名称相似不足以判定同一种**
+        4. **简介**仅供参考，不同来源的措辞差异很大
+
+        ## 内容要求
+
+        1. **不要因为名称相似就判同一种**，必须结合学名、科、属、简介一起看
+        2. 两株的字段互相矛盾（如中文名与拉丁学名明显不匹配）时，
+           结论应是字段有问题，而不是「它们是同一种」
+        3. `reason` 用中文，一句话，不超过 50 字
+        4. 拿不准时 `is_same` 给 false —— 让用户自己去核对，
+           比引导他合并掉两株不同的植物代价小得多
+    """.trimIndent()
+
+    private val CLEANING_SCHEMA_SPEC = """
+        ## 输出格式
+
+        只输出一个 JSON 对象，不要有任何其他文字，也不要使用 ``` 代码块标记。
+
+        {
+          "results": [
+            {
+              "group_id": "12",
+              "type": "POSSIBLE_DUPLICATE",
+              "is_same": true,
+              "confidence": 0.96,
+              "reason": "拉丁学名一致，中文名是其常见异名"
+            }
+          ]
+        }
+
+        - `group_id`：**原样返回**上面的「候选 N」里的那个数字
+        - `type` 取值：
+          - `POSSIBLE_DUPLICATE` 同一种
+          - `DATA_CONFLICT` 不是同一种，但有一边的字段互相矛盾
+          - `ALIAS_RELATION` 同一物种的不同名称写法，不需要合并
+          - `NOT_SAME` 明确不是同一种
+        - `is_same`：布尔值，是否判定为同一种
+        - **每一组都必须给出一条结果**，不要省略、不要合并
+    """.trimIndent()
 
     // ---------------- 片段 ----------------
 

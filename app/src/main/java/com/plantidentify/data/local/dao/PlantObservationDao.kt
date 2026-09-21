@@ -112,6 +112,18 @@ interface PlantObservationDao {
     @Query("DELETE FROM plant_observation")
     suspend fun clearAll()
 
+    /**
+     * 把一条档案名下的观察整体改挂到另一条档案（合并用）。
+     *
+     * **只改 `plantId`**：`observation_image` 跟的是 `observationId`，
+     * 所以照片会自己跟着走 —— 这正是把「合并」实现成改外键、
+     * 而不是搬照片文件的原因（搬文件要处理重名、失败回滚与孤儿清理）。
+     *
+     * 返回改动的行数，调用方据此显示「合并了 N 次观察」。
+     */
+    @Query("UPDATE plant_observation SET plantId = :to WHERE plantId = :from")
+    suspend fun reassignPlant(from: Long, to: Long): Int
+
     // ---------- 关系查询 ----------
 
     @Transaction

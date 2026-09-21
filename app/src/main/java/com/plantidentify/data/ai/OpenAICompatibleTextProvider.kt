@@ -133,6 +133,47 @@ class OpenAICompatibleTextProvider(
         }
     }
 
+    /**
+     * 通用文字补全 —— 单次调用，不重试（理由见 [TextProvider.complete]）。
+     */
+    override suspend fun complete(request: TextCompletionRequest): TextCompletionResult {
+        val config = request.config
+        if (!config.isUsable) {
+            return TextCompletionResult.Failure(AiFailure.NotConfigured(config.missingFields))
+        }
+
+        val body = JSONObject().apply {
+            put("model", config.model)
+            put(
+                "messages",
+                JSONArray().put(
+                    JSONObject().put("role", "user").put("content", request.prompt),
+                ),
+            )
+            put("temperature", request.temperature)
+            put("max_tokens", request.maxOutputTokens)
+        }
+
+        return when (val outcome = client.post(config, body.toString())) {
+            is ChatOutcome.Ok -> {
+                val content = client.extractMessageContent(outcome.rawBody)
+                if (content == null) {
+                    TextCompletionResult.Failure(
+                        AiFailure.InvalidResponse(
+                            detail = "响应中找不到模型回复的正文",
+                            rawSnippet = AiFailure.sanitize(outcome.rawBody),
+                        ),
+                    )
+                } else {
+                    TextCompletionResult.Success(content)
+                }
+            }
+
+            is ChatOutcome.HttpError -> TextCompletionResult.Failure(outcome.failure)
+            is ChatOutcome.TransportError -> TextCompletionResult.Failure(outcome.failure)
+        }
+    }
+
     private suspend fun postAnalysis(
         request: TextAnalysisRequest,
         correction: String?,

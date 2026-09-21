@@ -16,6 +16,8 @@ import com.plantidentify.data.local.entity.PlantObservationEntity
 import com.plantidentify.data.local.entity.PlantRecordEntity
 import com.plantidentify.data.local.projection.PlantCardRow
 import com.plantidentify.data.local.relation.PlantWithObservationsAndImages
+import com.plantidentify.domain.cleaning.MergeField
+import com.plantidentify.domain.cleaning.MergePlan
 import com.plantidentify.data.storage.ImageStore
 import com.plantidentify.domain.model.MergeLevel
 import com.plantidentify.domain.model.MergeSuggestion
@@ -54,6 +56,7 @@ class PlantRepository(
     private val plantRecordDao = database.plantRecordDao()
     private val observationDao = database.plantObservationDao()
     private val imageDao = database.observationImageDao()
+    private val cleaningIssueDao = database.cleaningIssueDao()
 
     /**
      * 观察统计。
@@ -730,6 +733,106 @@ class PlantRepository(
             purgePlant(plant.id).getOrThrow()
         }
         deleted.size
+    }
+
+    // ---------------- 合并（Phase 3 步骤 6）----------------
+
+    /**
+     * 按合并方案把两株档案合成一株（方案 §7.6）。
+     *
+     * ## 四步，全在一个事务里
+     *
+     * 1. 把 `drop` 名下的观察整体改挂到 `keep`（照片跟着观察走，见
+     *    [PlantObservationDao.reassignPlant]）
+     * 2. 按 [MergePlan] 逐字段写回 `keep`
+     * 3. `drop` **软删**（置 `deletedAt`），进回收站
+     * 4. 保证 `keep` 有一个代表观察
+     *
+     * ## 为什么是软删而不是物理删
+     *
+     * 合并把几十次观察、几十张照片改了父亲 —— 这是本 App 最重的破坏性操作。
+     * 软删让「合错了」从**事故**降级为**可撤销**：用户在回收站里
+     * 把被合并的那株恢复出来即可（它的观察已经改挂了，恢复后是一株空档案，
+     * 但字段都在），再手动改回去。方案 §22.9/22.10 明确要求这么做。
+     *
+     * 事务外还有一步：把围绕 `drop` 的待处理清洗问题标成已解决 ——
+     * 否则用户合并完还会看到「这株疑似重复」和「这株缺拉丁名」，
+     * 点进去却是「植物不存在」。
+     *
+     * @return 合并后的档案 id（即 `keepId`）
+     */
+    suspend fun mergeInto(plan: MergePlan): Result<Long> = runCatching {
+        val keep = plantRecordDao.getById(plan.keepId) ?: error("要保留的档案不存在")
+        val drop = plantRecordDao.getById(plan.dropId) ?: error("被合并的档案不存在")
+        if (keep.id == drop.id) error("不能把档案合并到它自己")
+
+        val now = System.currentTimeMillis()
+
+        // 代表观察要**在改挂之前**读：drop 原本的代表观察是用户选过的，
+        // 改挂之后再查就分不出哪条曾经是它的代表
+        val inheritedPrimary = observationDao.getByPlant(drop.id).firstOrNull { it.isPrimary }
+
+        database.withTransaction {
+            observationDao.reassignPlant(from = drop.id, to = keep.id)
+
+            plantRecordDao.update(applyMergePlan(keep, plan, now))
+
+            // drop 软删。**不删它的照片**：照片已经随观察改挂到 keep 名下，
+            // 此刻再按 drop 去清理文件会把 keep 正在用的照片删掉
+            plantRecordDao.update(drop.copy(deletedAt = now))
+
+            if (observationDao.getByPlant(keep.id).none { it.isPrimary }) {
+                inheritedPrimary?.let { observationDao.markPrimary(it.id) }
+            }
+        }
+
+        // 只结「只涉及被合并株」与「正是这两株是不是同一株」的问题，
+        // 不能把涉及多株的问题一起结掉 —— 见 CleaningIssueDao.resolveOnMerge
+        cleaningIssueDao.resolveOnMerge(keepId = keep.id, dropId = drop.id, now = now)
+
+        keep.id
+    }
+
+    /**
+     * 把 [MergePlan] 施加到保留侧。
+     *
+     * 逐字段取方案里的值 —— 方案对**每一个**可合并字段都有取值
+     * （两边都空时是 null），所以这里不需要「null 就不覆盖」的保护：
+     * 真出现 null，说明两边本来都没有值，写 null 与保留原值等价。
+     *
+     * 例外是 [MergeField.NAME]：方案的默认规则是「用保留侧的」，
+     * 但用户可以改选成另一边的名字；两侧都为空（不可能，中文名必填）
+     * 时退回原值，免得把标题清空。
+     *
+     * `updatedAt` 要更新：档案内容变了，它该回到列表最前面，
+     * 也才会被清洗的增量扫描重新检查。
+     */
+    private fun applyMergePlan(
+        keep: PlantRecordEntity,
+        plan: MergePlan,
+        now: Long,
+    ): PlantRecordEntity {
+        fun value(field: MergeField): String? = plan.value(field)
+
+        return keep.copy(
+            name = value(MergeField.NAME)?.takeIf { it.isNotBlank() } ?: keep.name,
+            latinName = value(MergeField.LATIN_NAME),
+            commonNames = value(MergeField.COMMON_NAMES),
+            family = value(MergeField.FAMILY),
+            genus = value(MergeField.GENUS),
+            category = value(MergeField.CATEGORY),
+            confidence = plan.confidence,
+            description = value(MergeField.DESCRIPTION),
+            morphologicalFeatures = value(MergeField.MORPHOLOGICAL_FEATURES),
+            growthHabits = value(MergeField.GROWTH_HABITS),
+            floweringPeriod = value(MergeField.FLOWERING_PERIOD),
+            fruitingPeriod = value(MergeField.FRUITING_PERIOD),
+            landscapeUses = value(MergeField.LANDSCAPE_USES),
+            careAdvice = value(MergeField.CARE_ADVICE),
+            pestControl = value(MergeField.PEST_CONTROL),
+            note = value(MergeField.NOTE),
+            updatedAt = now,
+        )
     }
 
     // ---------------- 任务队列（Phase 8）----------------

@@ -54,6 +54,28 @@ object Routes {
      */
     const val TRASH = "trash"
 
+    private const val ARG_ISSUE_ID = "issueId"
+
+    /**
+     * 数据清洗中心（Phase 3，完整版专属入口）。
+     *
+     * 与识别任务、回收站一样：**路由不做版本判断**，base 版没有入口
+     * 所以不可达，而数据层两版完全一致。
+     */
+    const val CLEANING = "cleaning"
+
+    /** 清洗问题详情（Phase 3） */
+    const val CLEANING_ISSUE = "cleaning_issue/{$ARG_ISSUE_ID}"
+
+    /**
+     * 合并预览（Phase 3）。
+     *
+     * 单独一个路由而不是把预览做成详情页里的对话框：合并要逐字段
+     * 对比 15 个字段，还要能换边 —— 那是**一整页**的信息量，
+     * 塞进对话框只会让人看不清就点确认。
+     */
+    const val MERGE_PREVIEW = "merge_preview/{$ARG_ISSUE_ID}"
+
     private const val ARG_PLANT_ID = "plantId"
     private const val ARG_OBSERVATION_ID = "observationId"
 
@@ -77,6 +99,11 @@ object Routes {
 
     fun observation(observationId: Long): String = "observation/$observationId"
 
+    fun cleaningIssue(issueId: Long): String = "cleaning_issue/$issueId"
+
+    fun mergePreview(issueId: Long): String = "merge_preview/$issueId"
+
     const val KEY_PLANT_ID = ARG_PLANT_ID
     const val KEY_OBSERVATION_ID = ARG_OBSERVATION_ID
+    const val KEY_ISSUE_ID = ARG_ISSUE_ID
 }

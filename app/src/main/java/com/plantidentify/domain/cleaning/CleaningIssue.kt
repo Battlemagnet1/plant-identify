@@ -117,6 +117,17 @@ enum class CleaningIssueStatus {
  *   老问题凭空消失、新问题凭空出现，白白多出一条
  */
 data class CleaningIssue(
+    /**
+     * 这条问题在库里的 id（未落库时为 0）。
+     *
+     * **与 [recordIds] 是两回事**：那个是「涉及哪几株植物」，
+     * 这个是「问题本身是哪一条」。界面要用它跳转到问题详情 ——
+     * 拿 [primaryRecordId] 去当路由参数，会让所有问题都跳到
+     * 「档案 id 恰好等于某条问题 id」的那一条上去
+     * （真机上表现为「点哪张卡都进同一个页面」）。
+     */
+    val id: Long = 0L,
+
     val type: CleaningIssueType,
     val severity: CleaningSeverity,
 
@@ -140,8 +151,24 @@ data class CleaningIssue(
     /** 是否经过 AI 判定 */
     val aiUsed: Boolean = false,
 
+    /**
+     * 本地是否**判不了**，需要 AI 复核。
+     *
+     * 级 1、2 是本地可以直接拍板的证据（学名相同 / 名称+科+属全同），
+     * 它们**不该进 AI 队列** —— 否则「学名完全相同」这种一眼能看出的重复
+     * 也要花一次调用的钱，而用户会看到 AI 复核对一堆显然重复的候选
+     * 说「是的，是同一株」，纯属浪费。
+     *
+     * 这个值会随每次扫描重新计算并刷新（用户补上学名后，一条级 3 的候选
+     * 会变成级 1，也就不再需要 AI 了），所以它不能只写在插入时。
+     */
+    val needsAi: Boolean = false,
+
     /** AI 给出的一句话理由；未过 AI 时为 null */
     val aiReason: String? = null,
+
+    /** AI 的结论类型。**未判定时为 null** —— 不要用「不等于 NOT_SAME」判「是同一种」 */
+    val verdictType: CleaningVerdictType? = null,
 
     /** 指纹的第三段，见类注释 */
     val discriminator: String? = null,
@@ -157,6 +184,12 @@ data class CleaningIssue(
             append(recordIds.distinct().sorted().joinToString(","))
         }
 
-    /** 主档案 id（用于「点进去看」）；无关联档案时为 null */
+    /**
+     * 主档案 id —— 「这件事主要关系到哪一株」。
+     *
+     * ⚠️ **它不是路由参数**。问题详情页要的是 [id]（问题本身的 id）；
+     * 把这两个混起来的表现是「点哪张卡都进同一条问题」，而且不报错。
+     * 这里保留它只为界面显示（例如在卡片上标出主要涉及的那一株）。
+     */
     val primaryRecordId: Long? get() = recordIds.minOrNull()
 }

@@ -19,6 +19,8 @@ import com.plantidentify.data.export.ReportThumbnailer
 import com.plantidentify.data.image.ImageCompressor
 import com.plantidentify.data.local.Migrations
 import com.plantidentify.data.local.PlantIdentifyDatabase
+import com.plantidentify.data.cleaning.AiCleaningAdvisor
+import com.plantidentify.data.cleaning.CleaningDataLoader
 import com.plantidentify.data.cleaning.CleaningOrchestrator
 import com.plantidentify.data.cleaning.ImageFingerprinter
 import com.plantidentify.data.recognition.AnalysisRunner
@@ -96,7 +98,15 @@ class AppContainer(context: Context) {
 
     private val appContext: Context = context.applicationContext
 
-    private val database: PlantIdentifyDatabase by lazy {
+    /**
+     * 数据库。
+     *
+     * 公开是为了让**清洗中心那一组页面**直接取 DAO：它们的职责就是
+     * 「读问题、改问题的状态」，而这些表本来就不属于任何一个领域仓库
+     * （`PlantRepository` 管的是档案，任务表归 `RecognitionQueue`）。
+     * 为它们新建一个仓库只是把同样的转发代码再写一遍。
+     */
+    val database: PlantIdentifyDatabase by lazy {
         Room.databaseBuilder(
             appContext,
             PlantIdentifyDatabase::class.java,
@@ -246,6 +256,15 @@ class AppContainer(context: Context) {
     }
 
     /**
+     * 清洗用的只读数据加载器。
+     *
+     * 做成容器里的单例不是为了缓存（它每次都重读），而是为了让
+     * **扫描 / 合并预览 / AI 顾问 / 界面**共用同一份字段口径 ——
+     * 各自 new 一个不会报错，只会在某处悄悄用上不同的快照定义。
+     */
+    val cleaningDataLoader: CleaningDataLoader by lazy { CleaningDataLoader(database) }
+
+    /**
      * 数据清洗编排器（Phase 3）。
      *
      * 注意它**没有常驻的扫描任务**：清洗是用户主动触发的
@@ -257,6 +276,20 @@ class AppContainer(context: Context) {
             database = database,
             imageStore = imageStore,
             fingerprinter = imageFingerprinter,
+            loader = cleaningDataLoader,
+        )
+    }
+
+    /**
+     * AI 清洗顾问（Phase 3 步骤 4）。只在用户点「AI 复核」时跑一次 ——
+     * 它花钱，所以绝不能挂在任何自动路径上（比如扫描完成自动触发）。
+     */
+    val aiCleaningAdvisor: AiCleaningAdvisor by lazy {
+        AiCleaningAdvisor(
+            aiSettingsStore = aiSettingsStore,
+            textProvider = textProvider,
+            database = database,
+            loader = cleaningDataLoader,
         )
     }
 

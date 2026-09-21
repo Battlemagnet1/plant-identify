@@ -4,7 +4,6 @@ import com.plantidentify.data.ai.TolerantJsonParser
 import com.plantidentify.data.local.PlantIdentifyDatabase
 import com.plantidentify.data.local.entity.CleaningIssueEntity
 import com.plantidentify.data.local.entity.CleaningStateEntity
-import com.plantidentify.data.local.entity.PlantRecordEntity
 import com.plantidentify.data.storage.ImageStore
 import com.plantidentify.domain.cleaning.CandidateSetBuilder
 import com.plantidentify.domain.cleaning.CleaningIssue
@@ -16,7 +15,6 @@ import com.plantidentify.domain.cleaning.ImageHealth
 import com.plantidentify.domain.cleaning.LocalRuleChecker
 import com.plantidentify.domain.cleaning.MergePlan
 import com.plantidentify.domain.cleaning.MergePlanner
-import com.plantidentify.domain.cleaning.RecordSnapshot
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -83,11 +81,9 @@ class CleaningOrchestrator(
     private val database: PlantIdentifyDatabase,
     private val imageStore: ImageStore,
     private val fingerprinter: ImageFingerprinter,
+    private val loader: CleaningDataLoader,
 ) {
 
-    private val recordDao = database.plantRecordDao()
-    private val observationDao = database.plantObservationDao()
-    private val imageDao = database.observationImageDao()
     private val issueDao = database.cleaningIssueDao()
     private val stateDao = database.cleaningStateDao()
 
@@ -105,26 +101,9 @@ class CleaningOrchestrator(
         val cursor = state?.lastCheckedAt ?: 0L
 
         // ---------------- 载入（一次性，后面全在内存里算）----------------
-        val plants = recordDao.getAll()
-        val knownPlantIds = plants.mapTo(HashSet()) { it.id }
-        val alivePlants = plants.filter { it.deletedAt == null }
-
-        val observations = observationDao.getAll()
-        val images = imageDao.getAll()
-
-        val imagesByObservation = images.groupBy { it.observationId }
-        val observationsByPlant = observations.groupBy { it.plantId }
-
-        fun snapshotOf(plant: PlantRecordEntity): RecordSnapshot {
-            val own = observationsByPlant[plant.id].orEmpty()
-            val imageCount = own.sumOf { imagesByObservation[it.id]?.size ?: 0 }
-            return plant.toSnapshot(observationCount = own.size, imageCount = imageCount)
-        }
-
-        val allRecords = alivePlants.map(::snapshotOf)
-        val allObservations = observations.map { obs ->
-            obs.toSnapshot(imagesByObservation[obs.id].orEmpty().map { it.imagePath })
-        }
+        val dataset = loader.load()
+        val allRecords = dataset.records
+        val allObservations = dataset.observations
 
         // 增量：只有「上次检查之后被改过」的档案才需要重新判定。
         // 用 started 而不是结束时间做下一次的游标，避免扫描期间被改的
@@ -159,17 +138,16 @@ class CleaningOrchestrator(
         val report = fingerprinter.scan(
             allObservations.flatMap { it.imagePaths }.distinct(),
         )
-        val orphanImageCount = images.count { it.observationId !in observations.mapTo(HashSet()) { o -> o.id } }
 
         // ---------------- 规则检查 ----------------
         val ruleIssues = LocalRuleChecker.check(
             records = subjects,
             observations = subjectObservations,
-            knownPlantIds = knownPlantIds,
+            knownPlantIds = dataset.knownPlantIds,
             allObservations = allObservations,
             imageHealth = ImageHealth(missing = report.missing, broken = report.broken),
             duplicateImageGroups = report.duplicateGroups(),
-            orphanImageCount = orphanImageCount,
+            orphanImageCount = dataset.orphanImageCount,
             isAiJsonUsable = { TolerantJsonParser.parse(it) !is TolerantJsonParser.ParseAttempt.Failed },
             now = started,
         )
@@ -192,6 +170,10 @@ class CleaningOrchestrator(
                 recordIds = listOf(pair.aId, pair.bId),
                 similarity = hit.similarity,
                 reason = hit.reason,
+                // 级 1、2 本地可直接判定，**不进 AI 队列** ——
+                // 让「学名完全相同」这种一眼能看出的重复也花一次调用，
+                // 用户会看到 AI 对一堆显然重复的候选说「是的，是同一株」
+                needsAi = hit.needsAi,
                 // 刻意**不带**等级：等级会随用户补全字段而变化
                 // （补上拉丁名后从级 3 升到级 1），带进指纹会让同一条问题
                 // 换个身份重生，「忽略」随即失效
@@ -207,6 +189,21 @@ class CleaningOrchestrator(
             issues.map { CleaningIssueEntity.fromDomain(it, now) },
         )
         val newIssues = rowIds.count { it != -1L }
+
+        // 已存在的问题要**刷新判据**（但不碰用户的 status 与 AI 结论）：
+        // 档案被改过之后，同一条问题的相似度、理由、乃至「要不要问 AI」
+        // 都可能变。不刷新的话，界面会一直显示上次扫描时的旧判据 ——
+        // 用户明明刚补上学名，那条候选还写着「中文名相似度 57%」
+        for (issue in issues) {
+            issueDao.refreshPending(
+                fingerprint = issue.fingerprint,
+                similarity = issue.similarity,
+                reason = issue.reason,
+                needsAi = issue.needsAi,
+                severity = issue.severity,
+                now = now,
+            )
+        }
 
         // ---------------- 自动解决：问题真的没了 ----------------
         //
@@ -251,32 +248,24 @@ class CleaningOrchestrator(
         val ids = issue.recordIdList()
         if (ids.size != 2) return@withContext null
 
-        val plants = recordDao.getAll().filter { it.deletedAt == null }.associateBy { it.id }
-        val observations = observationDao.getAll()
-        val images = imageDao.getAll()
-        val imagesByObservation = images.groupBy { it.observationId }
-
-        fun snapshotOf(id: Long): RecordSnapshot? {
-            val plant = plants[id] ?: return null
-            val own = observations.filter { it.plantId == id }
-            return plant.toSnapshot(
-                observationCount = own.size,
-                imageCount = own.sumOf { imagesByObservation[it.id]?.size ?: 0 },
-            )
-        }
-
-        val first = snapshotOf(ids[0]) ?: return@withContext null
-        val second = snapshotOf(ids[1]) ?: return@withContext null
+        // 走同一个 loader —— 合并预览与扫描必须看到**完全一样的**快照，
+        // 否则预览里显示「3 次观察」，合并完却变成 5 次，
+        // 而用户没有任何办法解释这个差异
+        val dataset = loader.load()
+        val first = dataset.recordById(ids[0]) ?: return@withContext null
+        val second = dataset.recordById(ids[1]) ?: return@withContext null
 
         val keep = MergePlanner.defaultKeep(first, second)
         val drop = if (keep.id == first.id) second else first
         MergePlanner.plan(keep, drop)
     }
 
-    /** 待 AI 复核的候选数（`POSSIBLE_DUPLICATE` 且还没过 AI） */
-    private suspend fun countAiPending(): Int =
-        issueDao.getOpen().count {
-            it.type == CleaningIssueType.POSSIBLE_DUPLICATE && !it.aiUsed
-        }
+    /**
+     * 待 AI 复核的候选数。
+     *
+     * 直接用 SQL 数（而不是把 OPEN 的问题全捞进内存再筛）：这个数字
+     * 每次扫描结束都要算，而扫描本身已经够重了。
+     */
+    private suspend fun countAiPending(): Int = issueDao.countPendingAi()
 
 }

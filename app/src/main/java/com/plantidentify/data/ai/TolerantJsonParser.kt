@@ -1,5 +1,7 @@
 package com.plantidentify.data.ai
 
+import com.plantidentify.domain.cleaning.CleaningVerdict
+import com.plantidentify.domain.cleaning.CleaningVerdictType
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -338,7 +340,147 @@ object TolerantJsonParser {
     private fun String.normalizeKey(): String =
         lowercase().replace("_", "").replace("-", "").replace(" ", "")
 
-    /** 步骤 5：字符串容错（数字、布尔也会被转成字符串） */
+    // ---------------- 数据清洗顾问（Phase 3）----------------
+
+    /** 一批清洗判定的解析结果 */
+    sealed interface CleaningParseResult {
+
+        /**
+         * 解析成功。
+         *
+         * @param verdicts 有效判定，**只含本地候选里真实存在的 group_id**
+         * @param dropped 被丢弃的条数（group_id 对不上、字段缺失等）
+         */
+        data class Ok(
+            val verdicts: List<CleaningVerdict>,
+            val dropped: Int = 0,
+            val note: String? = null,
+        ) : CleaningParseResult
+
+        data class Failed(val reason: String) : CleaningParseResult
+    }
+
+    /**
+     * 解析「数据清洗顾问」的批量结论。
+     *
+     * ## 两条刻意的宽容
+     *
+     * 1. **逐条 try，不因为一条坏掉丢掉整批**。一批 20 组里有一条 group_id
+     *    对不上就整批重问，代价是 20 组全再付一次钱，而收益只是那一条。
+     * 2. **对不上的直接丢弃并计数，不报错**。调用方拿到 [CleaningParseResult.Ok]
+     *    但 `dropped > 0` 时应当把那些组**留在待处理状态**（下次再问），
+     *    而不是标成「已判定」—— 漏判比错判容易发现。
+     *
+     * `type` 认不出来时**不丢弃**：宁可当成 `NOT_SAME` 让它进人工复核，
+     * 也不要因为模型换了个词就把一条真实重复放过去。见 [readVerdictType]。
+     */
+    fun parseCleaningResults(
+        raw: String,
+        knownIssueIds: Set<Long>,
+    ): CleaningParseResult {
+        val text = raw.trim()
+        if (text.isEmpty()) return CleaningParseResult.Failed("模型返回了空内容")
+
+        val cleaned = stripCodeFence(text)
+        parseCleaningObject(cleaned, knownIssueIds)?.let { return it }
+
+        val extracted = extractFirstJsonObject(cleaned)
+        if (extracted != null && extracted != cleaned) {
+            parseCleaningObject(extracted, knownIssueIds)?.let { return it }
+        }
+        return CleaningParseResult.Failed("返回内容中找不到可解析的 JSON 结构")
+    }
+
+    private fun parseCleaningObject(
+        text: String,
+        knownIssueIds: Set<Long>,
+    ): CleaningParseResult? {
+        val root = runCatching { JSONObject(text) }.getOrNull() ?: return null
+
+        // results 数组的键名容错：模型可能写成 result / items / data / 判定
+        val array = listOf("results", "result", "items", "data", "判定", "结果")
+            .firstNotNullOfOrNull { key ->
+                root.normalizedGet(key) as? JSONArray
+            } ?: return null
+
+        val verdicts = mutableListOf<CleaningVerdict>()
+        var dropped = 0
+
+        for (i in 0 until array.length()) {
+            val item = array.optJSONObject(i) ?: run { dropped++; continue }
+            // group_id 可能是 "12" 或 12：prompt 里要求原样返回，
+            // 但模型两种都写过，所以两种都要认
+            val issueId = item.readString("group_id", "groupid", "id", "组号", "编号")
+                ?.trimStart('0')
+                ?.toLongOrNull()
+                ?: run { dropped++; continue }
+
+            if (issueId !in knownIssueIds) {
+                dropped++
+                continue
+            }
+
+            val type = readVerdictType(item)
+            val same = item.readBooleanLike("is_same", "issame", "same", "是否同种", "是同一种")
+                ?: type.defaultSame
+
+            verdicts += CleaningVerdict(
+                issueId = issueId,
+                type = type,
+                isSame = same,
+                confidence = item.readConfidence().takeIf { it > 0.0 },
+                reason = item.readString("reason", "explanation", "why", "理由", "原因"),
+            )
+        }
+
+        if (verdicts.isEmpty() && dropped == 0) {
+            return CleaningParseResult.Failed("results 数组为空")
+        }
+        return CleaningParseResult.Ok(
+            verdicts = verdicts,
+            dropped = dropped,
+            note = if (dropped > 0) "$dropped 组对不上本地候选，已跳过" else null,
+        )
+    }
+
+    /**
+     * 认得出来的类型，认不出来一律当 [CleaningVerdictType.NOT_SAME]。
+     *
+     * 为什么**不丢弃**：认不出来通常意味着模型自造了一个词
+     * （`DUPLICATE` / `SAME_PLANT` / `不同种`…）。丢弃会让这条候选
+     * 一直留在待处理里，而用户下一次检查时它还是同样地被丢弃 ——
+     * 表现为「这条问题怎么点检查都处理不完」。
+     */
+    private fun readVerdictType(item: JSONObject): CleaningVerdictType {
+        val raw = item.readString("type", "verdict", "结论", "类型")?.uppercase() ?: return CleaningVerdictType.NOT_SAME
+        return when {
+            raw.contains("ALIAS") || raw.contains("异名") || raw.contains("别名") ->
+                CleaningVerdictType.ALIAS_RELATION
+            raw.contains("CONFLICT") || raw.contains("冲突") ->
+                CleaningVerdictType.DATA_CONFLICT
+            raw.contains("NOT_SAME") || raw.contains("NOTSAME") || raw.contains("不同") ->
+                CleaningVerdictType.NOT_SAME
+            raw.contains("SAME") || raw.contains("DUP") || raw.contains("重复") || raw.contains("同一") ->
+                CleaningVerdictType.POSSIBLE_DUPLICATE
+            else -> CleaningVerdictType.NOT_SAME
+        }
+    }
+
+    /** 布尔容错：`true` / `"true"` / `"是"` / `1` 都要认 */
+    private fun JSONObject.readBooleanLike(vararg candidates: String): Boolean? =
+        when (val value = normalizedGet(*candidates)) {
+            null, JSONObject.NULL -> null
+            is Boolean -> value
+            is Number -> value.toInt() != 0
+            is String -> when (value.trim().lowercase()) {
+                "true", "yes", "y", "1", "是", "同一种", "相同" -> true
+                "false", "no", "n", "0", "否", "不是", "不同" -> false
+                else -> null
+            }
+            else -> null
+        }
+
+    /** 字符串容错（数字、布尔也会被转成字符串） */
     private fun JSONObject.readString(vararg candidates: String): String? {
         val value = normalizedGet(*candidates) ?: return null
         val text = when (value) {

@@ -115,4 +115,19 @@ interface ObservationImageDao {
 
     @Query("SELECT IFNULL(MAX(sortOrder), -1) FROM observation_image WHERE observationId = :observationId")
     suspend fun maxSortOrder(observationId: Long): Int
+
+    /**
+     * 某株植物的封面图。
+     *
+     * **排序必须写全**（观察时间 → 照片顺序）：不加 ORDER BY 时
+     * SQLite 返回哪一行是不确定的，于是同一株植物在两次打开页面时
+     * 可能显示不同的封面 —— 用户会以为照片被换掉了。
+     */
+    @Query(
+        "SELECT i.imagePath FROM observation_image i " +
+            "INNER JOIN plant_observation o ON i.observationId = o.id " +
+            "WHERE o.plantId = :plantId " +
+            "ORDER BY o.timestamp ASC, i.sortOrder ASC LIMIT 1",
+    )
+    suspend fun coverPathForPlant(plantId: Long): String?
 }

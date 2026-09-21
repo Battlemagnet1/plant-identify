@@ -71,6 +71,7 @@ import com.plantidentify.ui.components.BackIconButton
 fun SettingsScreen(
     onBack: () -> Unit,
     onOpenDataManagement: () -> Unit,
+    onOpenCleaning: () -> Unit,
     viewModel: SettingsViewModel,
     modifier: Modifier = Modifier,
 ) {
@@ -374,6 +375,12 @@ fun SettingsScreen(
                 item {
                     DataManagementEntry(onOpen = onOpenDataManagement)
                 }
+
+                // 数据清洗紧跟其后：两者都是「维护已有数据」的动作，
+                // 分开放在设置页两端会让人找不到
+                item {
+                    CleaningEntry(onOpen = onOpenCleaning)
+                }
             }
 
             item {
@@ -432,6 +439,47 @@ private fun AppVersionCard() {
  * 导出 HTML、备份、恢复、位置开关都收在独立页面里 ——
  * 它们同属「数据进出的口子」，塞进设置页会把 AI 配置挤得找不到。
  */
+/**
+ * 数据清洗入口（Phase 3，完整版专属）。
+ *
+ * 副标题写清**它不改任何东西** —— 「清洗」这个词容易让人以为
+ * 会自动删掉或合并点什么，而实际上它只提示，一切修改都要用户确认。
+ * 不写清楚的话，用户不敢点。
+ */
+@Composable
+private fun CleaningEntry(onOpen: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        onClick = onOpen,
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "数据清洗",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Text(
+                    text = "检查缺失字段、异常坐标、重复照片与疑似重复的档案",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Text(
+                text = "›",
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
 @Composable
 private fun DataManagementEntry(onOpen: () -> Unit) {
     Card(

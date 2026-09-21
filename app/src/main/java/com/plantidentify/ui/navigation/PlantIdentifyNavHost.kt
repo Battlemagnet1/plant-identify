@@ -31,6 +31,12 @@ import com.plantidentify.ui.screens.recognition.RecognitionViewModel
 import com.plantidentify.ui.screens.search.SearchScreen
 import com.plantidentify.ui.screens.settings.SettingsScreen
 import com.plantidentify.ui.screens.settings.SettingsViewModel
+import com.plantidentify.ui.screens.cleaning.CleaningIssueDetailScreen
+import com.plantidentify.ui.screens.cleaning.CleaningIssueDetailViewModel
+import com.plantidentify.ui.screens.cleaning.CleaningViewModel
+import com.plantidentify.ui.screens.cleaning.DataCleaningScreen
+import com.plantidentify.ui.screens.cleaning.MergePreviewScreen
+import com.plantidentify.ui.screens.cleaning.MergePreviewViewModel
 import com.plantidentify.ui.screens.stats.StatsScreen
 import com.plantidentify.ui.screens.stats.StatsViewModel
 import com.plantidentify.ui.screens.tasks.RecognitionTaskListScreen
@@ -264,6 +270,87 @@ fun PlantIdentifyNavHost(
             )
         }
 
+        composable(Routes.CLEANING) {
+            val cleaningViewModel: CleaningViewModel = viewModel(
+                factory = CleaningViewModel.factory(
+                    orchestrator = container.cleaningOrchestrator,
+                    advisor = container.aiCleaningAdvisor,
+                    // 直接用容器里的 DAO：这一页要读 issue、要改它的 status，
+                    // 中间再套一层仓库只是多一层转发，没有别的收益
+                    issueDao = container.database.cleaningIssueDao(),
+                    loader = container.cleaningDataLoader,
+                ),
+            )
+            DataCleaningScreen(
+                viewModel = cleaningViewModel,
+                onBack = navController::popBackStack,
+                onOpenIssue = { issueId ->
+                    navController.navigateSingleTop(Routes.cleaningIssue(issueId))
+                },
+                onOpenMerge = { issueId ->
+                    navController.navigateSingleTop(Routes.mergePreview(issueId))
+                },
+            )
+        }
+
+        composable(Routes.CLEANING_ISSUE) { entry ->
+            // 参数从路由里解出来 —— 每个 entry 都重新求值，
+            // 所以「同一路由不同参数」不会被 ViewModel 复用坑到
+            val issueId = entry.arguments?.getString(Routes.KEY_ISSUE_ID)?.toLongOrNull()
+            if (issueId == null) {
+                // 参数坏掉时**不要**用 0 兜底去查：那会查到不存在的行、
+                // 显示成「问题已不存在」，把一个路由错误伪装成数据问题
+                navController.popBackStack()
+                return@composable
+            }
+            val detailViewModel: CleaningIssueDetailViewModel = viewModel(
+                key = "issue-$issueId",
+                factory = CleaningIssueDetailViewModel.factory(
+                    issueId = issueId,
+                    issueDao = container.database.cleaningIssueDao(),
+                    loader = container.cleaningDataLoader,
+                ),
+            )
+            CleaningIssueDetailScreen(
+                viewModel = detailViewModel,
+                imageStore = container.imageStore,
+                onBack = navController::popBackStack,
+                onOpenPlant = { plantId ->
+                    navController.navigateSingleTop(Routes.plantDetail(plantId))
+                },
+                onOpenMerge = { id ->
+                    navController.navigateSingleTop(Routes.mergePreview(id))
+                },
+            )
+        }
+
+        composable(Routes.MERGE_PREVIEW) { entry ->
+            val issueId = entry.arguments?.getString(Routes.KEY_ISSUE_ID)?.toLongOrNull()
+            if (issueId == null) {
+                navController.popBackStack()
+                return@composable
+            }
+            val mergeViewModel: MergePreviewViewModel = viewModel(
+                key = "merge-$issueId",
+                factory = MergePreviewViewModel.factory(
+                    issueId = issueId,
+                    orchestrator = container.cleaningOrchestrator,
+                    repository = container.plantRepository,
+                    issueDao = container.database.cleaningIssueDao(),
+                    loader = container.cleaningDataLoader,
+                ),
+            )
+            MergePreviewScreen(
+                viewModel = mergeViewModel,
+                onBack = navController::popBackStack,
+                // 合并完回清洗中心（不是回问题详情：那条问题已经结案了，
+                // 详情页只会显示「已不存在」）
+                onMerged = {
+                    navController.popBackStack(Routes.CLEANING, inclusive = false)
+                },
+            )
+        }
+
         composable(Routes.SETTINGS) {
             val settingsViewModel: SettingsViewModel = viewModel(
                 factory = SettingsViewModel.factory(
@@ -278,6 +365,9 @@ fun PlantIdentifyNavHost(
                 onBack = navController::popBackStack,
                 onOpenDataManagement = {
                     navController.navigateSingleTop(Routes.DATA_MANAGEMENT)
+                },
+                onOpenCleaning = {
+                    navController.navigateSingleTop(Routes.CLEANING)
                 },
             )
         }

@@ -6,6 +6,8 @@ import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import com.plantidentify.data.local.entity.CleaningIssueEntity
 import com.plantidentify.domain.cleaning.CleaningIssueStatus
+import com.plantidentify.domain.cleaning.CleaningSeverity
+import com.plantidentify.domain.cleaning.CleaningVerdictType
 import kotlinx.coroutines.flow.Flow
 
 /**
@@ -69,6 +71,114 @@ interface CleaningIssueDao {
     @Query("SELECT COUNT(*) FROM cleaning_issue WHERE status = 'OPEN'")
     suspend fun countOpen(): Int
 
+    // ---------------- AI 清洗顾问（Phase 3 步骤 4）----------------
+
+    /**
+     * 还没被 AI 判定过的疑似重复，**相似度高的优先**。
+     *
+     * 排序不是装饰：AI 调用有硬上限（见 `AiCleaningAdvisor`），
+     * 超出的部分要留到下次。先送相似度高的，是因为那些最可能是真重复 ——
+     * 上限被用掉时，损失的是最不可能需要处理的那些。
+     */
+    @Query(
+        "SELECT * FROM cleaning_issue " +
+            "WHERE status = 'OPEN' AND type = 'POSSIBLE_DUPLICATE' " +
+            "AND aiUsed = 0 AND needsAi = 1 " +
+            "ORDER BY similarity DESC LIMIT :limit",
+    )
+    suspend fun getPendingAi(limit: Int): List<CleaningIssueEntity>
+
+    /** 待 AI 复核的条数（界面上的按钮文案要用它） */
+    @Query(
+        "SELECT COUNT(*) FROM cleaning_issue " +
+            "WHERE status = 'OPEN' AND type = 'POSSIBLE_DUPLICATE' " +
+            "AND aiUsed = 0 AND needsAi = 1",
+    )
+    suspend fun countPendingAi(): Int
+
+    /**
+     * 刷新一条**仍待处理且未被 AI 判定过**的问题的派生字段。
+     *
+     * ## 为什么需要它，而不是「插入时写一次就够」
+     *
+     * 问题的文本与判据是**由档案内容算出来的**，而档案会被改：
+     * 用户给「百日红」补上拉丁学名后，原来那条级 3 的候选会变成级 1 ——
+     * 判据变了（`is_same` 也从「需要 AI」变成本地可判），
+     * 但 `insertIgnore` 不会更新已存在的行，于是
+     * 界面上那条问题**永远显示旧的判据**，还会继续被送进 AI 队列（白花钱）。
+     *
+     * 两道 WHERE 条件缺一不可：
+     * - `status = 'OPEN'` —— 用户点过「忽略/已解决」的行不许被改回来
+     * - `aiUsed = 0` —— 已经有 AI 结论的行不许被覆盖（那结论是真金白银换的）
+     */
+    @Query(
+        "UPDATE cleaning_issue SET similarity = :similarity, reason = :reason, " +
+            "needsAi = :needsAi, severity = :severity, updatedAt = :now " +
+            "WHERE fingerprint = :fingerprint AND status = 'OPEN' AND aiUsed = 0",
+    )
+    suspend fun refreshPending(
+        fingerprint: String,
+        similarity: Double?,
+        reason: String,
+        needsAi: Boolean,
+        severity: CleaningSeverity,
+        now: Long,
+    )
+
+    /**
+     * 写入 AI 判定。
+     *
+     * 一并更新 `severity` 与 `status`：确认是同一株的要提到最前面（严重），
+     * 判定为「并非同一种 / 名称差异」的直接结案 —— 这两件事都是判定的一部分，
+     * 分成两次 UPDATE 会在中间留下「AI 说不是同一种，但问题还挂在待办里」
+     * 的一致性问题（进程被杀就永久留在那儿）。
+     *
+     * **不动 `createdAt`**：问题的发现时间不该因为后来补了一次 AI 判定而改变。
+     */
+    @Query(
+        "UPDATE cleaning_issue SET aiUsed = :aiUsed, aiVerdictType = :verdict, " +
+            "aiReason = :reason, severity = :severity, status = :status, updatedAt = :now " +
+            "WHERE id = :id",
+    )
+    suspend fun updateAiVerdict(
+        id: Long,
+        aiUsed: Boolean,
+        verdict: CleaningVerdictType?,
+        reason: String?,
+        severity: CleaningSeverity,
+        status: CleaningIssueStatus,
+        now: Long,
+    )
+
+    /**
+     * 合并之后结案该结案的问题。
+     *
+     * ## 只结两类，不能写成「涉及被合并株的全部」
+     *
+     * 初版是「凡是 recordIds 里含 dropId 的都结案」，真机上立刻暴露了问题：
+     * 「7 张内容完全相同的照片出现在 **3 株**植物下」这条问题涉及 [1,2,3]，
+     * 合并掉 2 之后，1 与 3 的照片**依然重复** —— 问题仍然存在，
+     * 却被标成了已解决。而 `insertIgnore` 不会再把它插回来，
+     * 于是这条真实问题**永远不会再出现**。
+     *
+     * 所以只结：
+     * 1. **只涉及 drop 那一条**的（它进了回收站，围绕它的字段问题失去意义）
+     * 2. **正是「keep 与 drop 是不是同一株」**的重复候选（刚才的合并就是答案）
+     *
+     * 匹配用 `',' || recordIds || ','` 前后补逗号再比 ——
+     * 直接 `LIKE '%12%'` 会让 id 12 命中 112、120 里的「12」。
+     */
+    @Query(
+        "UPDATE cleaning_issue SET status = 'RESOLVED', updatedAt = :now " +
+            "WHERE status = 'OPEN' AND (" +
+            "  (',' || recordIds || ',') = ',' || :dropId || ',' " +
+            "  OR (type = 'POSSIBLE_DUPLICATE' " +
+            "      AND (',' || recordIds || ',') LIKE '%,' || :keepId || ',%' " +
+            "      AND (',' || recordIds || ',') LIKE '%,' || :dropId || ',%')" +
+            ")",
+    )
+    suspend fun resolveOnMerge(keepId: Long, dropId: Long, now: Long): Int
+
     /**
      * 涉及某条档案的待处理问题。
      *
@@ -92,25 +202,6 @@ interface CleaningIssueDao {
 
     @Query("UPDATE cleaning_issue SET status = :status, updatedAt = :now WHERE id = :id")
     suspend fun setStatus(id: Long, status: CleaningIssueStatus, now: Long)
-
-    /**
-     * 写入 AI 判定结果。
-     *
-     * 只更新 AI 相关字段与 `reason`/`similarity`，**不动 `createdAt`** ——
-     * 问题的发现时间不该因为后来补了一次 AI 判定而改变。
-     */
-    @Query(
-        "UPDATE cleaning_issue SET aiUsed = 1, aiReason = :aiReason, " +
-            "similarity = COALESCE(:similarity, similarity), " +
-            "reason = :reason, updatedAt = :now WHERE id = :id",
-    )
-    suspend fun applyAiVerdict(
-        id: Long,
-        aiReason: String?,
-        similarity: Double?,
-        reason: String,
-        now: Long,
-    )
 
     @Query("DELETE FROM cleaning_issue")
     suspend fun clearAll()

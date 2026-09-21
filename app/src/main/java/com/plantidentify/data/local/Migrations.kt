@@ -227,6 +227,45 @@ object Migrations {
     }
 
     /**
+     * v5 → v6：清洗问题记下 AI 的结论类型。
+     *
+     * 又是一次「只加一列」的迁移，但它的发布风险不在 SQL 上，而在**语义**上：
+     * 老行（v5 期间产生的）`aiVerdictType` 为 NULL，那是正确的 ——
+     * 它们确实没被 AI 判定过。可空列天然表达了这一点，
+     * 所以不需要回填，也不需要 `aiUsed` 与它保持一致。
+     *
+     * 唯一要留意的是**读的地方**：判「AI 说这是同一株」必须写成
+     * `aiVerdictType == POSSIBLE_DUPLICATE`，不能写成 `!= NOT_SAME` ——
+     * 后者会把 NULL（压根没判过）当成「AI 确认是同一株」。
+     */
+    val MIGRATION_5_6: Migration = object : Migration(5, 6) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE cleaning_issue ADD COLUMN aiVerdictType TEXT")
+        }
+    }
+
+    /**
+     * v6 → v7：清洗问题记下「本地判不了、需要 AI」。
+     *
+     * 与 v6 的迁移连着的：那一次加了「AI 的结论类型」，这一次加
+     * 「要不要问 AI」。两者都是同一个功能的字段，本可以合并成一次 ——
+     * 拆开是因为**它们是分别被发现的**：先做 AI 复核，真机上跑起来
+     * 才发现「AI 复核（3 组）」把学名完全相同的候选也算了进去。
+     *
+     * `NOT NULL DEFAULT 0` 是有意的：老行（v6 期间产生的）确实都是
+     * 「尚未判定要不要送 AI」的状态，默认 0 会漏掉它们 —— 所以
+     * **下一次扫描会把每一行重新算一遍并刷新**（见
+     * `CleaningIssueDao.refreshPending`），不依赖这个默认值正确。
+     */
+    val MIGRATION_6_7: Migration = object : Migration(6, 7) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                "ALTER TABLE cleaning_issue ADD COLUMN needsAi INTEGER NOT NULL DEFAULT 0",
+            )
+        }
+    }
+
+    /**
      * 全部迁移，按版本升序。
      *
      * 顺序不能乱 —— Room 会从当前版本开始，逐个往上找能匹配起点的迁移。
@@ -236,5 +275,7 @@ object Migrations {
         MIGRATION_2_3,
         MIGRATION_3_4,
         MIGRATION_4_5,
+        MIGRATION_5_6,
+        MIGRATION_6_7,
     )
 }

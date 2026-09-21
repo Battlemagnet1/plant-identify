@@ -7,6 +7,7 @@ import com.plantidentify.domain.cleaning.CleaningIssue
 import com.plantidentify.domain.cleaning.CleaningIssueStatus
 import com.plantidentify.domain.cleaning.CleaningIssueType
 import com.plantidentify.domain.cleaning.CleaningSeverity
+import com.plantidentify.domain.cleaning.CleaningVerdictType
 
 /**
  * 清洗问题（落库形态）。
@@ -75,6 +76,27 @@ data class CleaningIssueEntity(
 
     val aiUsed: Boolean = false,
 
+    /**
+     * 本地判不了、需要 AI 复核（见 [com.plantidentify.domain.cleaning.CleaningIssue.needsAi]）。
+     *
+     * 单独一列而不是靠 `severity` 推断：严重程度是**给用户看的排序依据**，
+     * 它将来会因为界面需要而调整；而「要不要送 AI」是成本护栏的判据。
+     * 让后者依赖前者，会在某次调 severity 时静默把花钱的口子开大。
+     */
+    val needsAi: Boolean = false,
+
+    /**
+     * AI 给的结论类型（[com.plantidentify.domain.cleaning.CleaningVerdictType]）。
+     *
+     * ## 为什么不把它拼进 [aiReason] 了事
+     *
+     * 「AI 认为它们是同一株」和「AI 认为只是名称差异」在界面上要显示成
+     * 不同的样子（前者是待办、后者无需处理），也可能决定按钮的文案。
+     * 把类型塞进理由字符串里，界面就得**解析自己写进去的前缀** ——
+     * 那种耦合会在某次改文案时静默失效（前缀不再匹配，类型永远取不到）。
+     */
+    val aiVerdictType: CleaningVerdictType? = null,
+
     val aiReason: String? = null,
 
     val status: CleaningIssueStatus = CleaningIssueStatus.OPEN,
@@ -88,13 +110,16 @@ data class CleaningIssueEntity(
         recordIds.split(',').mapNotNull { it.trim().toLongOrNull() }
 
     fun toDomain(): CleaningIssue = CleaningIssue(
+        id = id,
         type = type,
         severity = severity,
         recordIds = recordIdList(),
         similarity = similarity,
         reason = reason,
         aiUsed = aiUsed,
+        needsAi = needsAi,
         aiReason = aiReason,
+        verdictType = aiVerdictType,
         discriminator = discriminator,
     )
 
@@ -119,6 +144,8 @@ data class CleaningIssueEntity(
             similarity = issue.similarity,
             reason = issue.reason,
             aiUsed = issue.aiUsed,
+            needsAi = issue.needsAi,
+            aiVerdictType = issue.verdictType,
             aiReason = issue.aiReason,
             status = status,
             createdAt = now,

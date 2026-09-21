@@ -114,6 +114,32 @@ data class MergePlan(
  * 而「被合并的那一株」正是用户判定为「其实是同一株」的那株 ——
  * 让一个被判为重复的名字覆盖主档名，等于让用户的选择失效。
  */
+/**
+ * 取某个合并字段在一条档案上的原始值。
+ *
+ * 界面要让用户「看到两边各自是什么」再决定用哪边 —— 只有方案里的
+ * 择优结果是不够的（那只存了「选中哪一边」）。放在这里而不是界面层，
+ * 是因为它必须与 [MergePlanner] 的字段清单**一一对应**：
+ * 缺一个字段的表现是「那一行永远显示（暂无）」，而字段本身其实是有的。
+ */
+fun RecordSnapshot.valueOf(field: MergeField): String? = when (field) {
+    MergeField.NAME -> name
+    MergeField.LATIN_NAME -> latinName
+    MergeField.FAMILY -> family
+    MergeField.GENUS -> genus
+    MergeField.CATEGORY -> category
+    MergeField.COMMON_NAMES -> commonNames
+    MergeField.DESCRIPTION -> description
+    MergeField.MORPHOLOGICAL_FEATURES -> morphologicalFeatures
+    MergeField.GROWTH_HABITS -> growthHabits
+    MergeField.FLOWERING_PERIOD -> floweringPeriod
+    MergeField.FRUITING_PERIOD -> fruitingPeriod
+    MergeField.LANDSCAPE_USES -> landscapeUses
+    MergeField.CARE_ADVICE -> careAdvice
+    MergeField.PEST_CONTROL -> pestControl
+    MergeField.NOTE -> note
+}
+
 object MergePlanner {
 
     /**

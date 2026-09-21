@@ -108,6 +108,33 @@ sealed interface TextAnalysisResult {
 }
 
 /**
+ * 一次通用文字补全请求。
+ *
+ * 与 [TextAnalysisRequest] 的区别：那个带「植物百科八个字段」的语义，
+ * 返回的是 [PlantAnalysis]；清洗顾问要的是一段自由结构的 JSON
+ * （一组候选的判定结果），套不进百科的字段模型里。
+ */
+data class TextCompletionRequest(
+    val prompt: String,
+    val config: AiEndpointConfig,
+
+    /** 输出上限。清洗一批 20 组约需 1600 tokens，留一点余量 */
+    val maxOutputTokens: Int = 2000,
+
+    /**
+     * 温度。清洗是**判定**任务不是写作任务，要的是可复现的结论 ——
+     * 0.2 是「允许它把理由说通顺」与「别每次都给出不同答案」之间的折中。
+     */
+    val temperature: Double = 0.2,
+)
+
+/** 通用文字补全的结果 */
+sealed interface TextCompletionResult {
+    data class Success(val rawText: String) : TextCompletionResult
+    data class Failure(val failure: AiFailure) : TextCompletionResult
+}
+
+/**
  * 文字分析通道（规格书第九节）。
  *
  * ## 与视觉通道的关系
@@ -130,6 +157,24 @@ interface TextProvider {
      * 实现约定：**不抛异常**，所有失败收敛到 [TextAnalysisResult.Failure]。
      */
     suspend fun generateAnalysis(request: TextAnalysisRequest): TextAnalysisResult
+
+    /**
+     * 通用文字补全 —— 给「一次性的结构化任务」用（目前只有数据清洗顾问）。
+     *
+     * ## 与 [generateAnalysis] 的两处刻意差异
+     *
+     * 1. **单次调用，不重试**。百科那次解析失败会带纠正说明重问一次，
+     *    因为正文里混进几个字是常事；而清洗是一次问 20 组，
+     *    一批重问等于 20 组全部再付一次钱 —— 按方案 §8.3 的取舍，
+     *    解析失败就是把该批标成「未判定」，让本地候选留在待处理里。
+     * 2. **不带 `response_format`**。既然不重试，就没有「被服务端拒了再关掉」
+     *    的机会；部分服务端对它有兼容问题，一旦 400 这一批就白跑。
+     *    靠 prompt 强制「只输出 JSON」+ 解析侧容错更稳。
+     *
+     * 实现约定同 [generateAnalysis]：**不抛异常**，失败收敛到
+     * [TextCompletionResult.Failure]。
+     */
+    suspend fun complete(request: TextCompletionRequest): TextCompletionResult
 
     /**
      * 测试文字通道的连接。
