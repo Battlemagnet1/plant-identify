@@ -264,7 +264,7 @@ fun DataManagementScreen(
                         "包含 ${pending.manifest.plantCount} 株植物 · " +
                         "${pending.manifest.observationCount} 次观察 · " +
                         "${pending.manifest.imageCount} 张照片\n\n" +
-                        "⚠️ 恢复会**清空当前全部档案**并替换为备份内容，此操作不可撤销。",
+                        "⚠️ 恢复会清空当前全部档案并替换为备份内容，此操作不可撤销。",
                 )
             },
             confirmButton = {

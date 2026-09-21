@@ -136,7 +136,7 @@ fun TrashScreen(
             title = { Text("彻底删除「${plant.name}」？") },
             text = {
                 Text(
-                    "这条档案与它的全部观察、照片都会从本机删除，**无法恢复**。" +
+                    "这条档案与它的全部观察、照片都会从本机删除，无法恢复。" +
                         "如果只是想让它从列表里消失，用「恢复」把它放回去后再决定也不迟。",
                 )
             },
@@ -157,7 +157,7 @@ fun TrashScreen(
             onDismissRequest = { showPurgeAll = false },
             title = { Text("清空回收站？") },
             text = {
-                Text("${plants.size} 株档案及其照片将被永久删除，**无法恢复**。")
+                Text("${plants.size} 株档案及其照片将被永久删除，无法恢复。")
             },
             confirmButton = {
                 TextButton(onClick = {
