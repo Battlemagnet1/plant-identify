@@ -94,8 +94,20 @@ interface ObservationImageDao {
 
     // ---------- 统计 ----------
 
-    /** 照片数 = observation_image 行数 */
-    @Query("SELECT COUNT(*) FROM observation_image")
+    /**
+     * 照片数 = observation_image 行数，**只数未被删除的档案下的照片**。
+     *
+     * 两级 JOIN 缺一不可：图片挂在观察上，观察挂在档案上，
+     * 而删除标记只在档案上。
+     */
+    @Query(
+        """
+        SELECT COUNT(*) FROM observation_image i
+        INNER JOIN plant_observation o ON i.observationId = o.id
+        INNER JOIN plant_record p ON o.plantId = p.id
+        WHERE p.deletedAt IS NULL
+        """,
+    )
     fun observeImageCount(): Flow<Int>
 
     @Query("SELECT COUNT(*) FROM observation_image WHERE observationId = :observationId")

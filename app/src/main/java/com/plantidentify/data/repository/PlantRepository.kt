@@ -654,6 +654,48 @@ class PlantRepository(
      * 数据库级联不等于文件级联。
      */
     suspend fun deletePlant(plantId: Long): Result<Unit> = runCatching {
+        val existing = plantRecordDao.getById(plantId)
+            ?: error("植物档案不存在")
+        // 只打一个删除标记：行还在、照片还在，回收站里能看能恢复。
+        // 真正的物理删除在 [purgePlant] —— 那个操作不可撤销，
+        // 必须由用户在回收站点「彻底删除」时明确触发
+        plantRecordDao.update(
+            existing.copy(deletedAt = System.currentTimeMillis()),
+        )
+        Unit
+    }
+
+    // ---------------- 回收站（Phase 3）----------------
+
+    /** 回收站列表（已删档案，最近删的在最上面） */
+    fun observeDeletedPlants(): Flow<List<PlantRecordEntity>> = plantRecordDao.observeDeleted()
+
+    fun observeDeletedCount(): Flow<Int> = plantRecordDao.observeDeletedCount()
+
+    suspend fun loadDeleted(): List<PlantRecordEntity> = plantRecordDao.getDeleted()
+
+    suspend fun countDeleted(): Int = plantRecordDao.countDeleted()
+
+    /**
+     * 从回收站恢复。
+     *
+     * 只清删除标记，不碰任何其它字段 —— 恢复的意义是「当作没删过」，
+     * 若顺手更新 `updatedAt`，这株植物会凭空跳到列表最前面。
+     */
+    suspend fun restorePlant(plantId: Long): Result<Unit> = runCatching {
+        plantRecordDao.getById(plantId) ?: error("植物档案不存在")
+        plantRecordDao.restoreById(plantId)
+        Unit
+    }
+
+    /**
+     * 彻底删除 —— **不可撤销**。
+     *
+     * 这是原先 [deletePlant] 的物理删逻辑，位置上从「一个按钮的动作」
+     * 降级为「回收站里的二次确认」。文件清理走引用计数：
+     * 同一张图可能被多条观察共享，数到 0 才能删。
+     */
+    suspend fun purgePlant(plantId: Long): Result<Unit> = runCatching {
         val paths = imageDao.getImagesForPlant(plantId).map { it.imagePath }
 
         database.withTransaction {
@@ -671,6 +713,23 @@ class PlantRepository(
             }
         }
         Unit
+    }
+
+    /**
+     * 清空回收站。
+     *
+     * 逐条走 [purgePlant]（而不是一条 SQL 全删）—— 文件清理必须按株做：
+     * 一次性删完行之后就再也查不出每株有过哪些照片，磁盘上会留下
+     * 永远无人认领的孤儿文件。
+     *
+     * @return 实际清掉的株数
+     */
+    suspend fun purgeAllDeleted(): Result<Int> = runCatching {
+        val deleted = plantRecordDao.getDeleted()
+        deleted.forEach { plant ->
+            purgePlant(plant.id).getOrThrow()
+        }
+        deleted.size
     }
 
     // ---------------- 任务队列（Phase 8）----------------

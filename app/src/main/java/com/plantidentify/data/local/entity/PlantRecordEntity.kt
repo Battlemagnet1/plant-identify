@@ -22,6 +22,8 @@ import androidx.room.PrimaryKey
         Index(value = ["latinName"]),
         // 第二、三优先级：中文名 + 科 + 属 / 中文名 + 科
         Index(value = ["name", "family", "genus"]),
+        // 回收站：每个列表查询都要带上 deletedAt IS NULL，走索引才不退化成全表扫
+        Index(value = ["deletedAt"]),
     ],
 )
 data class PlantRecordEntity(
@@ -97,4 +99,23 @@ data class PlantRecordEntity(
 
     val createdAt: Long,
     val updatedAt: Long,
+
+    /**
+     * 软删除时间戳；null = 未删除。
+     *
+     * ## 为什么是软删而不是物理删
+     *
+     * 删植物是不可逆的高代价操作（可能带着几十次观察与照片）。
+     * 软删把「删错了」从**事故**降级为**可撤销的操作** ——
+     * 用户在回收站里点恢复即可，而物理删只留下一句「已删除」。
+     *
+     * ## 谁能看见它
+     *
+     * - **过滤**（必须在 SQL 里做，不能在内存里挑）：列表 / 搜索 /
+     *   统计 / 归并候选 / HTML 导出 —— 漏一处就会出现「删了还在这里」
+     *   或者更糟的「已删档案变成归并候选」
+     * - **不过滤**：备份 `getAll()`（回收站要能随备份迁移）、
+     *   以及按 id 的 `getById()`（删除/恢复/详情判断都需要看到它）
+     */
+    val deletedAt: Long? = null,
 )

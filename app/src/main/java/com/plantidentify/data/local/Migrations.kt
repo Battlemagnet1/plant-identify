@@ -114,9 +114,36 @@ object Migrations {
     }
 
     /**
+     * v3 → v4：档案软删除（回收站）。
+     *
+     * 只加一列 + 一个索引 —— 可空列的老行自动 NULL = 未删除，
+     * 正是「既有档案都没被删过」该有的语义。
+     *
+     * ## 为什么这一列的发布风险比它看起来高
+     *
+     * 加列本身零风险，但它会**改变既有查询的语义**：
+     * 加完之后所有列表/搜索/统计/归并候选都必须补 `deletedAt IS NULL`，
+     * 漏一处就会出现「删了还在这里」，或者更糟的
+     * **「已删档案变成归并候选」**（用户把 A 删了，识别到同种植物时
+     * 又被提示「要不要并入 A」）。
+     *
+     * 所以这一版**必须连同 PlantRecordDao 的整张过滤清单一起发布**，
+     * 不能拆成「先加列、下次再改查询」。
+     */
+    val MIGRATION_3_4: Migration = object : Migration(3, 4) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE plant_record ADD COLUMN deletedAt INTEGER")
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_plant_record_deletedAt` " +
+                    "ON `plant_record` (`deletedAt`)",
+            )
+        }
+    }
+
+    /**
      * 全部迁移，按版本升序。
      *
      * 顺序不能乱 —— Room 会从当前版本开始，逐个往上找能匹配起点的迁移。
      */
-    val ALL: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3)
+    val ALL: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
 }

@@ -40,7 +40,7 @@ import com.plantidentify.data.local.entity.RecognitionTaskImageEntity
         RecognitionTaskEntity::class,
         RecognitionTaskImageEntity::class,
     ],
-    version = 3,
+    version = 4,
     exportSchema = true,
 )
 abstract class PlantIdentifyDatabase : RoomDatabase() {

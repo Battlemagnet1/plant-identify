@@ -135,9 +135,9 @@ fun PlantDetailScreen(
             title = { Text("删除这份植物档案？") },
             text = {
                 Text(
-                    "将同时删除 $observationCount 次观察、$photoCount 张照片，无法撤销。\n\n" +
-                        "如果只是不想再看到它，暂时没有「归档」功能 —— " +
-                        "这一点如实说明，删除就是真的删除。",
+                    "这份档案连同 $observationCount 次观察、$photoCount 张照片会移入回收站。\n\n" +
+                        "照片不会立刻消失，你可以随时在「回收站」里恢复它，" +
+                        "或者在那里彻底删除。",
                 )
             },
             // 确认按钮刻意不叫「删除」：顶栏那个也写着「删除」，
@@ -149,7 +149,7 @@ fun PlantDetailScreen(
                         confirmDelete = false
                         viewModel.deletePlant()
                     },
-                ) { Text("确认删除") }
+                ) { Text("移入回收站") }
             },
             dismissButton = {
                 OutlinedButton(onClick = { confirmDelete = false }) { Text("取消") }

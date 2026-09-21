@@ -317,7 +317,14 @@ class BackupManager(
     /** 删除 filesDir/images 下没有被任何图片行引用的文件 */
     private suspend fun pruneOrphanFiles() {
         runCatching {
-            val referenced = database.observationImageDao().getAll().map { it.imagePath }.toSet()
+            // 引用集必须**同时**包含在途任务的图片。
+            // 只算 observation_image 的话，用户一恢复备份，尚未开跑的识别任务
+            // 的照片就会被当成孤儿文件删掉 —— 任务行还在、路径全成死链，
+            // 而且不会有任何报错，只表现为「任务莫名其妙失败：照片读取失败」
+            val referenced = (
+                database.observationImageDao().getAll().map { it.imagePath } +
+                    database.recognitionTaskImageDao().getAllPaths()
+                ).toSet()
             val root = File(context.filesDir, DIR_IMAGES)
             if (!root.isDirectory) return
             root.walkTopDown()
@@ -368,7 +375,10 @@ class BackupManager(
                             .put("analysisStatus", plant.analysisStatus.name)
                             .put("note", plant.note)
                             .put("createdAt", plant.createdAt)
-                            .put("updatedAt", plant.updatedAt),
+                            .put("updatedAt", plant.updatedAt)
+                            // 回收站必须随备份走 —— 不带的话，用户在旧机上
+                            // 删掉的植物会在新机恢复后「复活」，而回收站是空的
+                            .put("deletedAt", plant.deletedAt),
                     )
                 }
             },
@@ -446,6 +456,8 @@ class BackupManager(
                 note = node.optText("note"),
                 createdAt = node.optLong("createdAt"),
                 updatedAt = node.optLong("updatedAt"),
+                // 回收站随备份走（旧包没有这个字段 → null = 未删除）
+                deletedAt = node.optLongOrNull("deletedAt"),
             )
         }
 
@@ -525,6 +537,14 @@ private fun JSONArray?.orEmpty(): List<JSONObject> {
  */
 private fun JSONObject.optText(key: String): String? =
     if (!has(key) || isNull(key)) null else optString(key).takeIf { it.isNotBlank() }
+
+/**
+ * 可空 Long。`optLong` 对缺失键返回 0L —— 而 0 是合法的时间戳，
+ * 用它当「没有值」会让未删除的档案被当成「1970 年删的」，
+ * 所以必须像 optDoubleOrNull 一样显式判 has()。
+ */
+private fun JSONObject.optLongOrNull(key: String): Long? =
+    if (has(key) && !isNull(key)) optLong(key) else null
 
 private fun JSONObject.optDoubleOrNull(key: String): Double? =
     if (!has(key) || isNull(key)) null else optDouble(key)

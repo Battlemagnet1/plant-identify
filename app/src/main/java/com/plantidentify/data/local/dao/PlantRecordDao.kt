@@ -43,7 +43,7 @@ interface PlantRecordDao {
 
     // ---------- 读取 ----------
 
-    @Query("SELECT * FROM plant_record ORDER BY updatedAt DESC")
+    @Query("SELECT * FROM plant_record WHERE deletedAt IS NULL ORDER BY updatedAt DESC")
     fun observeAll(): Flow<List<PlantRecordEntity>>
 
     @Query("SELECT * FROM plant_record WHERE id = :plantId")
@@ -59,13 +59,14 @@ interface PlantRecordDao {
     @Query(
         """
         SELECT * FROM plant_record
-        WHERE :keyword = ''
-           OR name LIKE '%' || :keyword || '%'
-           OR IFNULL(latinName, '') LIKE '%' || :keyword || '%'
-           OR IFNULL(family, '') LIKE '%' || :keyword || '%'
-           OR IFNULL(genus, '') LIKE '%' || :keyword || '%'
-           OR IFNULL(category, '') LIKE '%' || :keyword || '%'
-           OR IFNULL(note, '') LIKE '%' || :keyword || '%'
+        WHERE deletedAt IS NULL
+          AND (:keyword = ''
+               OR name LIKE '%' || :keyword || '%'
+               OR IFNULL(latinName, '') LIKE '%' || :keyword || '%'
+               OR IFNULL(family, '') LIKE '%' || :keyword || '%'
+               OR IFNULL(genus, '') LIKE '%' || :keyword || '%'
+               OR IFNULL(category, '') LIKE '%' || :keyword || '%'
+               OR IFNULL(note, '') LIKE '%' || :keyword || '%')
         ORDER BY updatedAt DESC
         """,
     )
@@ -78,7 +79,8 @@ interface PlantRecordDao {
     @Query(
         """
         SELECT * FROM plant_record
-        WHERE latinName IS NOT NULL
+        WHERE deletedAt IS NULL
+          AND latinName IS NOT NULL
           AND LOWER(TRIM(latinName)) = LOWER(TRIM(:latinName))
         LIMIT 1
         """,
@@ -88,7 +90,8 @@ interface PlantRecordDao {
     @Query(
         """
         SELECT * FROM plant_record
-        WHERE name = :name
+        WHERE deletedAt IS NULL
+          AND name = :name
           AND IFNULL(family, '') = IFNULL(:family, '')
           AND IFNULL(genus, '') = IFNULL(:genus, '')
         LIMIT 1
@@ -103,15 +106,24 @@ interface PlantRecordDao {
     @Query(
         """
         SELECT * FROM plant_record
-        WHERE name = :name
+        WHERE deletedAt IS NULL
+          AND name = :name
           AND IFNULL(family, '') = IFNULL(:family, '')
         LIMIT 1
         """,
     )
     suspend fun findByNameAndFamily(name: String, family: String?): PlantRecordEntity?
 
-    /** 低置信度候选：仅用于「可能已存在相同植物」提示，必须由用户确认 */
-    @Query("SELECT * FROM plant_record WHERE name LIKE '%' || :name || '%' LIMIT 5")
+    /**
+     * 低置信度候选：仅用于「可能已存在相同植物」提示，必须由用户确认。
+     *
+     * 必须带 `deletedAt IS NULL` —— 漏了的话，用户删掉的档案会重新变成
+     * 归并候选（「要不要把新识别的并入你刚删掉的那株」）。
+     */
+    @Query(
+        "SELECT * FROM plant_record WHERE deletedAt IS NULL " +
+            "AND name LIKE '%' || :name || '%' LIMIT 5",
+    )
     suspend fun findFuzzyByName(name: String): List<PlantRecordEntity>
 
     // ---------- 列表与搜索（规格书第十六、十九节）----------
@@ -146,6 +158,7 @@ interface PlantRecordDao {
                 LIMIT 1)
                 AS coverPath
         FROM plant_record p
+        WHERE p.deletedAt IS NULL
         ORDER BY p.updatedAt DESC
         """,
     )
@@ -185,7 +198,8 @@ interface PlantRecordDao {
                 LIMIT 1)
                 AS coverPath
         FROM plant_record p
-        WHERE (
+        WHERE p.deletedAt IS NULL
+          AND (
                 :keyword = ''
                 OR p.name LIKE '%' || :keyword || '%'
                 OR IFNULL(p.latinName, '') LIKE '%' || :keyword || '%'
@@ -220,28 +234,38 @@ interface PlantRecordDao {
 
     // ---------- 统计（规格书第二十节，口径 2026-09-18 已确认）----------
 
-    /** 不同植物 = plant_record 行数 */
-    @Query("SELECT COUNT(*) FROM plant_record")
+    /** 不同植物 = plant_record 行数（回收站里的不算） */
+    @Query("SELECT COUNT(*) FROM plant_record WHERE deletedAt IS NULL")
     fun observeDistinctPlantCount(): Flow<Int>
 
-    @Query("SELECT COUNT(DISTINCT family) FROM plant_record WHERE family IS NOT NULL AND family != ''")
+    @Query(
+        "SELECT COUNT(DISTINCT family) FROM plant_record " +
+            "WHERE deletedAt IS NULL AND family IS NOT NULL AND family != ''",
+    )
     fun observeFamilyCount(): Flow<Int>
 
-    @Query("SELECT COUNT(DISTINCT genus) FROM plant_record WHERE genus IS NOT NULL AND genus != ''")
+    @Query(
+        "SELECT COUNT(DISTINCT genus) FROM plant_record " +
+            "WHERE deletedAt IS NULL AND genus IS NOT NULL AND genus != ''",
+    )
     fun observeGenusCount(): Flow<Int>
 
     // ---------- 关系查询 ----------
 
+    /**
+     * 详情：**已删档案返回 null** —— 界面据此走「已在回收站」分支，
+     * 而不是把一个已删除的档案当成正常档案展示。
+     */
     @Transaction
-    @Query("SELECT * FROM plant_record WHERE id = :plantId")
+    @Query("SELECT * FROM plant_record WHERE id = :plantId AND deletedAt IS NULL")
     fun observePlantWithObservations(plantId: Long): Flow<PlantWithObservations?>
 
     @Transaction
-    @Query("SELECT * FROM plant_record WHERE id = :plantId")
+    @Query("SELECT * FROM plant_record WHERE id = :plantId AND deletedAt IS NULL")
     fun observePlantDetail(plantId: Long): Flow<PlantWithObservationsAndImages?>
 
     @Transaction
-    @Query("SELECT * FROM plant_record ORDER BY updatedAt DESC")
+    @Query("SELECT * FROM plant_record WHERE deletedAt IS NULL ORDER BY updatedAt DESC")
     fun observeAllWithObservations(): Flow<List<PlantWithObservations>>
 
     /**
@@ -252,8 +276,37 @@ interface PlantRecordDao {
      * 按「最近修改」排会让同一份数据每次导出得到不同的编号。
      */
     @Transaction
-    @Query("SELECT * FROM plant_record ORDER BY createdAt ASC")
+    @Query("SELECT * FROM plant_record WHERE deletedAt IS NULL ORDER BY createdAt ASC")
     suspend fun getAllWithObservationsAndImages(): List<PlantWithObservationsAndImages>
+
+    // ---------- 回收站（Phase 3）----------
+
+    /**
+     * 回收站列表：只取**已删**的，按删除时间倒序（最近删的在最上面）。
+     *
+     * 这是唯一一处**反过来**过滤 deletedAt 的查询 ——
+     * 其余所有查询都是 `IS NULL`，只有这里要 `IS NOT NULL`。
+     */
+    @Query("SELECT * FROM plant_record WHERE deletedAt IS NOT NULL ORDER BY deletedAt DESC")
+    fun observeDeleted(): Flow<List<PlantRecordEntity>>
+
+    @Query("SELECT * FROM plant_record WHERE deletedAt IS NOT NULL ORDER BY deletedAt DESC")
+    suspend fun getDeleted(): List<PlantRecordEntity>
+
+    @Query("SELECT COUNT(*) FROM plant_record WHERE deletedAt IS NOT NULL")
+    fun observeDeletedCount(): Flow<Int>
+
+    @Query("SELECT COUNT(*) FROM plant_record WHERE deletedAt IS NOT NULL")
+    suspend fun countDeleted(): Int
+
+    /**
+     * 恢复：把 deletedAt 清空。
+     *
+     * 不动 `updatedAt` —— 恢复不是「修改」这个档案的内容，
+     * 它该留在列表里原来的时间位置上。
+     */
+    @Query("UPDATE plant_record SET deletedAt = NULL WHERE id = :plantId")
+    suspend fun restoreById(plantId: Long)
 
     // ---------- 备份与恢复 ----------
 

@@ -35,6 +35,8 @@ import com.plantidentify.ui.screens.stats.StatsScreen
 import com.plantidentify.ui.screens.stats.StatsViewModel
 import com.plantidentify.ui.screens.tasks.RecognitionTaskListScreen
 import com.plantidentify.ui.screens.tasks.RecognitionTaskListViewModel
+import com.plantidentify.ui.screens.trash.TrashScreen
+import com.plantidentify.ui.screens.trash.TrashViewModel
 
 /**
  * 导航图（规格书第二十七节）。
@@ -228,7 +230,19 @@ fun PlantIdentifyNavHost(
             )
             DataManagementScreen(
                 onBack = navController::popBackStack,
+                onOpenTrash = { navController.navigateSingleTop(Routes.TRASH) },
                 viewModel = dataViewModel,
+            )
+        }
+
+        // 回收站（Phase 3）。入口在数据管理页且仅完整版可见
+        composable(Routes.TRASH) {
+            val trashViewModel: TrashViewModel = viewModel(
+                factory = TrashViewModel.factory(repository = container.plantRepository),
+            )
+            TrashScreen(
+                viewModel = trashViewModel,
+                onBack = navController::popBackStack,
             )
         }
 

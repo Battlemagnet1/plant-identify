@@ -47,6 +47,13 @@ object Routes {
      */
     const val TASK_LIST = "tasks"
 
+    /**
+     * 回收站（Phase 3，完整版专属入口）。
+     *
+     * 与其他新页面一样，路由本身不做版本判断 —— base 版没有入口所以不可达。
+     */
+    const val TRASH = "trash"
+
     private const val ARG_PLANT_ID = "plantId"
     private const val ARG_OBSERVATION_ID = "observationId"
 

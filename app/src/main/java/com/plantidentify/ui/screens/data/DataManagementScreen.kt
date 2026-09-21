@@ -44,11 +44,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import android.Manifest
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.plantidentify.AppEdition
 import com.plantidentify.data.backup.BackupEntry
 import com.plantidentify.data.export.ExportMode
 import com.plantidentify.data.export.FileSharing
 import com.plantidentify.data.export.formatBytes
 import com.plantidentify.ui.components.BackIconButton
+import com.plantidentify.ui.components.SectionCard
 import java.io.File
 
 /**
@@ -61,6 +63,7 @@ import java.io.File
 @Composable
 fun DataManagementScreen(
     onBack: () -> Unit,
+    onOpenTrash: () -> Unit,
     viewModel: DataManagementViewModel,
     modifier: Modifier = Modifier,
 ) {
@@ -180,6 +183,23 @@ fun DataManagementScreen(
                 onRestoreLocal = viewModel::prepareRestoreFromLocal,
                 onDeleteBackup = viewModel::deleteBackup,
             )
+
+            // 回收站只在完整版出现（基础版没有这个页面）
+            if (AppEdition.isFull) {
+                SectionCard(title = "回收站") {
+                    Text(
+                        text = "删除的植物档案会先放进回收站，可随时恢复；" +
+                            "只有在那里点「彻底删除」才会连同照片一起清除。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    OutlinedButton(
+                        onClick = onOpenTrash,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("打开回收站") }
+                }
+            }
 
             // 进行中 / 刚完成的任务
             when (val current = task) {
@@ -564,23 +584,3 @@ private fun ResultCard(message: String, onShare: () -> Unit, onDismiss: () -> Un
     }
 }
 
-@Composable
-private fun SectionCard(title: String, content: @Composable () -> Unit) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant,
-        ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-    ) {
-        Column(modifier = Modifier.padding(18.dp)) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.Medium,
-            )
-            Spacer(Modifier.height(10.dp))
-            content()
-        }
-    }
-}

@@ -69,8 +69,21 @@ interface PlantObservationDao {
 
     // ---------- 统计 ----------
 
-    /** 观察次数 = plant_observation 行数 */
-    @Query("SELECT COUNT(*) FROM plant_observation")
+    /**
+     * 观察次数 = plant_observation 行数，**但只数未被删除的档案**。
+     *
+     * 必须 JOIN 回 plant_record 过滤 deletedAt：观察行本身没有删除概念，
+     * 它是随档案一起软删的。不 JOIN 的话，把一株有 20 次观察的植物
+     * 放进回收站，统计页的「观察次数」仍然算着那 20 次 ——
+     * 统计与列表对不上，用户会以为回收站没生效。
+     */
+    @Query(
+        """
+        SELECT COUNT(*) FROM plant_observation o
+        INNER JOIN plant_record p ON o.plantId = p.id
+        WHERE p.deletedAt IS NULL
+        """,
+    )
     fun observeObservationCount(): Flow<Int>
 
     /**
@@ -81,8 +94,13 @@ interface PlantObservationDao {
      * 只取地名不取坐标：筛选是给人用的，人记的是「在哪」而不是经纬度。
      */
     @Query(
-        "SELECT DISTINCT locationName FROM plant_observation " +
-            "WHERE locationName IS NOT NULL AND locationName != '' ORDER BY locationName",
+        """
+        SELECT DISTINCT o.locationName FROM plant_observation o
+        INNER JOIN plant_record p ON o.plantId = p.id
+        WHERE p.deletedAt IS NULL
+          AND o.locationName IS NOT NULL AND o.locationName != ''
+        ORDER BY o.locationName
+        """,
     )
     fun observeLocationNames(): Flow<List<String>>
 
