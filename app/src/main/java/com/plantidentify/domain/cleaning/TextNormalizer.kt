@@ -88,13 +88,27 @@ object TextNormalizer {
      * 规则：前两个词必留（属 + 种）；若第三词是 `var.` / `subsp.` / `f.` / `cv.`，
      * 则再保留一个词（那是**种下等级**，属于学名的有效部分，
      * 丢掉会让两个不同的栽培变种被判成同一物种）。
+     *
+     * ## 杂交符必须先摘掉（2026-09-21 修的）
+     *
+     * 杂交符是符号而不是词，但 `Platanus × acerifolia` 按空格切出来后
+     * 它会**占掉「第二个词」的位置**，于是 `take(2)` 得到 `Platanus ×` ——
+     * 种加词被挤掉，小写之后变成 `platanus x`。
+     *
+     * 后果不是「少了一点信息」而是**误判成同一物种**：
+     * `Platanus × acerifolia` 与 `Platanus × hispanica` 归一化后
+     * 都是 `platanus x`，在六级判定里直接命中「拉丁学名完全相同」——
+     * 而它们是不同的杂交种。栽培植物里带 × 的学名很常见，这条会真的咬人。
      */
     fun stripAuthorCitation(raw: String): String {
         val cleaned = normalizeBase(raw)
             .replace(Regex("[()（）]"), " ")
             .trim()
         if (cleaned.isEmpty()) return ""
-        val words = cleaned.split(" ").filter { it.isNotBlank() }
+        val words = cleaned.split(" ")
+            .filter { it.isNotBlank() }
+            .filterNot { it.lowercase() in HYBRID_MARKERS }
+        if (words.isEmpty()) return ""
         if (words.size <= 2) return words.joinToString(" ")
 
         val kept = words.take(2).toMutableList()
@@ -160,6 +174,15 @@ object TextNormalizer {
 
     /** 种下等级标记 —— 星号后面那个词属于学名的有效部分 */
     private val RANK_MARKERS = setOf("var.", "var", "subsp.", "subsp", "ssp.", "f.", "cv.")
+
+    /**
+     * 杂交符的各种写法。
+     *
+     * 它们**不是词**，参与分词只会挤掉真正的种加词（见 [stripAuthorCitation]）。
+     * `x` 单列一个字母看起来危险，但在学名里它除了杂交符没有别的含义 ——
+     * 属名与种加词都至少两个字母。
+     */
+    private val HYBRID_MARKERS = setOf("x", "×", "✕", "╳")
 
     /**
      * 噪声后缀：模型的不确定性标注与学名缩写。

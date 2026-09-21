@@ -1,6 +1,7 @@
 package com.plantidentify.domain.cleaning
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -90,6 +91,42 @@ class TextNormalizerTest {
         val tokens = TextNormalizer.tokens("悬铃,木")
         // 「铃,木」这种跨标点的组合无意义，不该出现
         assertTrue(tokens.none { it.contains(",") })
+    }
+
+    @Test
+    fun `杂交符不能挤掉种加词`() {
+        // 杂交符是符号而不是词。不摘掉的话，按空格切出来的第二个词
+        // 就是「×」，take(2) 得到「属名 + ×」，种加词被挤掉 ——
+        // 结果「Platanus × acerifolia」与「Platanus × hispanica」
+        // 归一化成同一个字符串，在六级判定里直接命中「学名完全相同」。
+        // 栽培植物带 × 的学名很常见，所以这不是理论问题。
+        assertEquals(
+            "platanus acerifolia",
+            TextNormalizer.normalizeLatin("Platanus × acerifolia (Aiton) Willd."),
+        )
+        assertNotEquals(
+            TextNormalizer.normalizeLatin("Platanus × acerifolia"),
+            TextNormalizer.normalizeLatin("Platanus × hispanica"),
+        )
+    }
+
+    @Test
+    fun `杂交符的各种写法仍然统一`() {
+        // 与上面一起构成完整契约：符号本身要抹掉，但不同的写法
+        // 仍然归一到同一个学名
+        val times = TextNormalizer.normalizeLatin("Platanus × acerifolia")
+        assertEquals(times, TextNormalizer.normalizeLatin("Platanus x acerifolia"))
+        assertEquals(times, TextNormalizer.normalizeLatin("Platanus acerifolia"))
+    }
+
+    @Test
+    fun `种下等级仍然保留`() {
+        // 摘杂交符不能把「第三词是 var.」这条规则一起弄坏：
+        // 丢掉种下等级会让两个不同的栽培变种被判成同一物种
+        assertEquals(
+            "acer palmatum var. atropurpureum",
+            TextNormalizer.normalizeLatin("Acer palmatum var. atropurpureum"),
+        )
     }
 
     @Test

@@ -141,9 +141,100 @@ object Migrations {
     }
 
     /**
+     * v4 → v5：清洗功能的三张表（Phase 3）。
+     *
+     * ## 为什么这三张表要单独一次迁移
+     *
+     * 方案原本把它们和 `deletedAt`、任务表一起塞进 `MIGRATION_2_3`。
+     * 实际落地时拆成了三次，理由是**它们的风险面完全不同**：
+     * 任务表与软删都会改变既有查询的语义（必须连同 DAO 改动一起发），
+     * 而这三张是**全新的表、没有任何既有代码读它们** ——
+     * 建表本身不可能影响任何现有功能，可以和上层逐步交付。
+     *
+     * 拆开还有一个直接好处：如果清洗的迁移真出了问题，
+     * 回滚范围只有「清洗功能不可用」，用户的档案与回收站毫发无伤。
+     *
+     * ## 三张表各自的定位
+     *
+     * | 表 | 性质 | 丢了会怎样 |
+     * |---|---|---|
+     * | `cleaning_issue` | 用户决策的载体 | 「忽略」失效，每个问题每次扫描重问一遍 |
+     * | `image_fingerprint` | 纯缓存 | 只是下次检查慢一点（要重算 SHA-256） |
+     * | `cleaning_state` | 游标 | 下次自动全扫一遍 |
+     *
+     * 所以备份里**三张都不带**（见 §3.5）—— 前两张是派生数据，
+     * 第三张是「本机扫到哪儿了」，跨机迁移没有意义，
+     * 而恢复备份后旧值只会导致扫少或重扫，不会导致数据错误。
+     */
+    val MIGRATION_4_5: Migration = object : Migration(4, 5) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            // ① 清洗问题。fingerprint 唯一索引 = 「忽略」能生效的全部机制
+            // 各列的顺序与 PlantRecordEntity 的字段顺序一致 ——
+            // 下面这几段 CREATE TABLE 是**照抄 Room 生成的 createSql** 的
+            // （见 app/schemas/.../5.json）。SQLite 其实不在乎列的先后，
+            // 但 Room 的迁移校验会拿手写 SQL 与生成 SQL 对齐比较，
+            // 写法一致才能让「核对过」这件事由脚本机械完成，
+            // 而不是靠人肉逐字读一遍。
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `cleaning_issue` (" +
+                    "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                    "`fingerprint` TEXT NOT NULL, " +
+                    "`type` TEXT NOT NULL, " +
+                    "`severity` TEXT NOT NULL, " +
+                    "`recordIds` TEXT NOT NULL, " +
+                    "`discriminator` TEXT, " +
+                    "`similarity` REAL, " +
+                    "`reason` TEXT NOT NULL, " +
+                    "`aiUsed` INTEGER NOT NULL, " +
+                    "`aiReason` TEXT, " +
+                    "`status` TEXT NOT NULL, " +
+                    "`createdAt` INTEGER NOT NULL, " +
+                    "`updatedAt` INTEGER NOT NULL)",
+            )
+            db.execSQL(
+                "CREATE UNIQUE INDEX IF NOT EXISTS `index_cleaning_issue_fingerprint` " +
+                    "ON `cleaning_issue` (`fingerprint`)",
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_cleaning_issue_status` " +
+                    "ON `cleaning_issue` (`status`)",
+            )
+
+            // ② 照片哈希缓存。主键是相对路径 → 新增照片天然是一条新行
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `image_fingerprint` (" +
+                    "`imagePath` TEXT NOT NULL, " +
+                    "`sha256` TEXT NOT NULL, " +
+                    "`sizeBytes` INTEGER NOT NULL, " +
+                    "`modifiedAt` INTEGER NOT NULL, " +
+                    "`computedAt` INTEGER NOT NULL, " +
+                    "PRIMARY KEY(`imagePath`))",
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_image_fingerprint_sha256` " +
+                    "ON `image_fingerprint` (`sha256`)",
+            )
+
+            // ③ 扫描游标（单行，id 恒为 1）
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `cleaning_state` (" +
+                    "`id` INTEGER NOT NULL, " +
+                    "`lastCheckedAt` INTEGER NOT NULL, " +
+                    "`cleaningVersion` INTEGER NOT NULL, " +
+                    "PRIMARY KEY(`id`))",
+            )
+        }
+    }
+
+    /**
      * 全部迁移，按版本升序。
      *
      * 顺序不能乱 —— Room 会从当前版本开始，逐个往上找能匹配起点的迁移。
      */
-    val ALL: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+    val ALL: Array<Migration> = arrayOf(
+        MIGRATION_1_2,
+        MIGRATION_2_3,
+        MIGRATION_3_4,
+        MIGRATION_4_5,
+    )
 }

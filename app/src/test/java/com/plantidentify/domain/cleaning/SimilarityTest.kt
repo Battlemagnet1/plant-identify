@@ -99,6 +99,26 @@ class SimilarityTest {
     }
 
     @Test
+    fun `短中文名的相似度必须跨过候选门槛`() {
+        // 方案自己举的例子。原先统一 0.5/0.5 权重时实得 0.548，
+        // 比 §7.4 级 3 的门槛 0.55 差 0.002 —— 方案想解决的问题依然被漏掉。
+        // 这条断言把「门槛必须可达」钉住：光看区间（> 0.5）发现不了它
+        val score = Similarity.nameSimilarity("悬铃木", "悬铃树")
+        assertTrue("实得 $score，应 >= 0.55", score >= 0.55)
+    }
+
+    @Test
+    fun `拉丁学名一字之差必须能达到级 4 的门槛`() {
+        // 拼写变体是级 4 存在的唯一理由。按**词**算 Jaccard 时
+        // 「acerifolia / acerifolius」只有 1/3，加权后 0.52，
+        // 离 0.85 差得远 —— 改用字符二元组后能过线。
+        // 这是「阈值看起来合理但永远达不到」的典型：不拿真实例子算一遍
+        // 是不会发现的
+        val score = Similarity.latinSimilarity("Platanus acerifolia", "Platanus acerifolius")
+        assertTrue("实得 $score，应 >= 0.85", score >= 0.85)
+    }
+
+    @Test
     fun `jaccard 空集语义`() {
         assertEquals(1.0, Similarity.jaccard(emptySet(), emptySet()), 1e-9)
         assertEquals(0.0, Similarity.jaccard(setOf("a"), emptySet()), 1e-9)

@@ -19,6 +19,8 @@ import com.plantidentify.data.export.ReportThumbnailer
 import com.plantidentify.data.image.ImageCompressor
 import com.plantidentify.data.local.Migrations
 import com.plantidentify.data.local.PlantIdentifyDatabase
+import com.plantidentify.data.cleaning.CleaningOrchestrator
+import com.plantidentify.data.cleaning.ImageFingerprinter
 import com.plantidentify.data.recognition.AnalysisRunner
 import com.plantidentify.data.recognition.RecognitionExecutor
 import com.plantidentify.data.recognition.RecognitionQueue
@@ -235,6 +237,29 @@ class AppContainer(context: Context) {
      *
      * 入队 / 重试 / 取消 / 启动自愈都从这走；界面状态一律读任务表。
      */
+    /**
+     * 照片哈希器（含缓存）。做成单例是因为它的缓存表在库里 ——
+     * 每次新建实例不会出错，只会让缓存永远命中不了。
+     */
+    val imageFingerprinter: ImageFingerprinter by lazy {
+        ImageFingerprinter(imageStore = imageStore, dao = database.imageFingerprintDao())
+    }
+
+    /**
+     * 数据清洗编排器（Phase 3）。
+     *
+     * 注意它**没有常驻的扫描任务**：清洗是用户主动触发的
+     * （打开清洗中心点「开始检查」），不像识别任务要排队等系统条件。
+     * 所以在容器里只是拿好依赖，不在这里起协程。
+     */
+    val cleaningOrchestrator: CleaningOrchestrator by lazy {
+        CleaningOrchestrator(
+            database = database,
+            imageStore = imageStore,
+            fingerprinter = imageFingerprinter,
+        )
+    }
+
     val recognitionQueue: RecognitionQueue by lazy {
         RecognitionQueue(
             workManager = WorkManager.getInstance(appContext),

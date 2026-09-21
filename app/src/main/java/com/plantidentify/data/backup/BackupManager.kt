@@ -292,6 +292,18 @@ class BackupManager(
                 database.plantObservationDao().clearAll()
                 database.plantRecordDao().clearAll()
 
+                // 清洗的三张表是**派生数据**，不随备份走，所以恢复后必须清空：
+                //  · cleaning_issue 里的 recordIds 指向的是旧库的 id，
+                //    不清的话用户会看到一批点进去「植物不存在」的待办
+                //  · image_fingerprint 里的路径在新库里可能对应别的照片，
+                //    不清会给出错误的内容哈希（比慢更糟：它会让「重复照片」判错）
+                //  · cleaning_state 的游标若保留，下次扫描会以为「都查过了」，
+                //    而库已经被整体换掉 —— 于是新的重复问题一个都发现不了
+                database.cleaningIssueDao().clearAll()
+                database.imageFingerprintDao().clearAll()
+                database.cleaningStateDao()
+                    .put(com.plantidentify.data.local.entity.CleaningStateEntity())
+
                 payload.plants.forEach { database.plantRecordDao().insert(it) }
                 payload.observations.forEach { database.plantObservationDao().insert(it) }
                 // 图片行整体插入 —— 一次事务一次写入，比逐条快得多

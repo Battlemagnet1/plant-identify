@@ -2,11 +2,17 @@ package com.plantidentify.data.local
 
 import androidx.room.Database
 import androidx.room.RoomDatabase
+import com.plantidentify.data.local.dao.CleaningIssueDao
+import com.plantidentify.data.local.dao.CleaningStateDao
+import com.plantidentify.data.local.dao.ImageFingerprintDao
 import com.plantidentify.data.local.dao.ObservationImageDao
 import com.plantidentify.data.local.dao.PlantObservationDao
 import com.plantidentify.data.local.dao.PlantRecordDao
 import com.plantidentify.data.local.dao.RecognitionTaskDao
 import com.plantidentify.data.local.dao.RecognitionTaskImageDao
+import com.plantidentify.data.local.entity.CleaningIssueEntity
+import com.plantidentify.data.local.entity.CleaningStateEntity
+import com.plantidentify.data.local.entity.ImageFingerprintEntity
 import com.plantidentify.data.local.entity.ObservationImageEntity
 import com.plantidentify.data.local.entity.PlantObservationEntity
 import com.plantidentify.data.local.entity.PlantRecordEntity
@@ -39,8 +45,11 @@ import com.plantidentify.data.local.entity.RecognitionTaskImageEntity
         ObservationImageEntity::class,
         RecognitionTaskEntity::class,
         RecognitionTaskImageEntity::class,
+        CleaningIssueEntity::class,
+        ImageFingerprintEntity::class,
+        CleaningStateEntity::class,
     ],
-    version = 4,
+    version = 5,
     exportSchema = true,
 )
 abstract class PlantIdentifyDatabase : RoomDatabase() {
@@ -61,6 +70,18 @@ abstract class PlantIdentifyDatabase : RoomDatabase() {
     abstract fun recognitionTaskDao(): RecognitionTaskDao
 
     abstract fun recognitionTaskImageDao(): RecognitionTaskImageDao
+
+    /**
+     * 清洗问题（v5 新增）。用户点过「忽略」的决策就存在这张表里，
+     * 靠 `fingerprint` 唯一索引保证每次扫描不会重问。
+     */
+    abstract fun cleaningIssueDao(): CleaningIssueDao
+
+    /** 照片 SHA-256 缓存（v5）。纯派生数据，丢了只是下次检查慢一点 */
+    abstract fun imageFingerprintDao(): ImageFingerprintDao
+
+    /** 扫描游标（v5）。单行表，记住「上次扫到什么时候」 */
+    abstract fun cleaningStateDao(): CleaningStateDao
 
     companion object {
         const val NAME = "plant_identify.db"
