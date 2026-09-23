@@ -30,6 +30,7 @@ import com.plantidentify.data.location.LocationProvider
 import com.plantidentify.data.location.LocationSettingsStore
 import com.plantidentify.data.repository.PlantRepository
 import com.plantidentify.data.storage.ImageStore
+import com.plantidentify.data.stress.StressDataSeeder
 import com.plantidentify.data.storage.MediaSaver
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -291,6 +292,16 @@ class AppContainer(context: Context) {
             database = database,
             loader = cleaningDataLoader,
         )
+    }
+
+    /**
+     * 压测造数据器（Phase 4）。
+     *
+     * 只在 debug 构建里被用到 —— release 包里入口是编译期常量条件，
+     * 整块会被折掉，这个 lazy 也就永远不会被触发。
+     */
+    val stressDataSeeder: StressDataSeeder by lazy {
+        StressDataSeeder(database = database, imageStore = imageStore)
     }
 
     val recognitionQueue: RecognitionQueue by lazy {

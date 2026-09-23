@@ -11,6 +11,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.plantidentify.BuildConfig
 import com.plantidentify.AppContainer
 import com.plantidentify.ui.camera.CameraCaptureScreen
 import com.plantidentify.ui.screens.data.DataManagementScreen
@@ -38,6 +39,8 @@ import com.plantidentify.ui.screens.cleaning.DataCleaningScreen
 import com.plantidentify.ui.screens.cleaning.MergePreviewScreen
 import com.plantidentify.ui.screens.cleaning.MergePreviewViewModel
 import com.plantidentify.ui.screens.stats.StatsScreen
+import com.plantidentify.ui.screens.stress.StressToolScreen
+import com.plantidentify.ui.screens.stress.StressToolViewModel
 import com.plantidentify.ui.screens.stats.StatsViewModel
 import com.plantidentify.ui.screens.tasks.RecognitionTaskListScreen
 import com.plantidentify.ui.screens.tasks.RecognitionTaskListViewModel
@@ -351,6 +354,29 @@ fun PlantIdentifyNavHost(
             )
         }
 
+        // 压测工具（Phase 4）：只在 debug 构建里注册。
+        // release 包里 BuildConfig.DEBUG 是编译期常量 false，这一整块
+        // （连同 StressToolScreen 的引用）会被 R8 折掉 ——
+        // 所以发布包既进不来这条路由、也不为它付出体积
+        if (BuildConfig.DEBUG) {
+            composable(Routes.STRESS_TOOL) {
+                val stressViewModel: StressToolViewModel = viewModel(
+                    factory = StressToolViewModel.factory(
+                        seeder = container.stressDataSeeder,
+                        imageStore = container.imageStore,
+                        plantRecordDao = container.database.plantRecordDao(),
+                        plantObservationDao = container.database.plantObservationDao(),
+                        observationImageDao = container.database.observationImageDao(),
+                        cleaningIssueDao = container.database.cleaningIssueDao(),
+                    ),
+                )
+                StressToolScreen(
+                    viewModel = stressViewModel,
+                    onBack = navController::popBackStack,
+                )
+            }
+        }
+
         composable(Routes.SETTINGS) {
             val settingsViewModel: SettingsViewModel = viewModel(
                 factory = SettingsViewModel.factory(
@@ -368,6 +394,9 @@ fun PlantIdentifyNavHost(
                 },
                 onOpenCleaning = {
                     navController.navigateSingleTop(Routes.CLEANING)
+                },
+                onOpenStressTool = {
+                    navController.navigateSingleTop(Routes.STRESS_TOOL)
                 },
             )
         }

@@ -41,8 +41,10 @@ android {
         // 模拟器为 Android 14 / API 34，minSdk 必须 ≤ 34 才能安装
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0.0"
+
+        // versionCode / versionName **刻意不在这里设**，见下面两个 flavor 块。
+        // 放在 defaultConfig 会让两个包被迫共用同一个版本号，而它们是
+        // 独立分发（不同 applicationId）、各自覆盖升级的两条线。
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -54,12 +56,13 @@ android {
     // full = 完整版（含统计/位置/HTML 导出/备份恢复/别名与病虫害/大图查看/照片增删），
     //        独立 applicationId，与基础版**可同时安装**、互不覆盖。
     //
-    // 两者共用同一份底层代码与同一个数据库结构（version 2）与同一套 AI 请求，
+    // 两者共用同一份底层代码与同一个数据库结构（version 7）与同一套 AI 请求，
     // 差异只在界面入口 —— 靠 FULL_EDITION 这个编译期常量控制。
     // 于是两个包的档案数据可以通过备份包互相迁移。
     //
-    // 版本号两边完全相同、都保持 1.0.0：区分靠包名而不是版本号，
-    // 因为两个包的「版本」指的是同一份代码的两个功能集，不是两次迭代。
+    // **版本号各管各的**：两个包独立分发，各自的用户只会覆盖升级到自己那条线，
+    // 所以它们本来就该各自递增。绑在一起的话，给完整版加功能会逼着基础版
+    // 也跳一个版本号，而基础版的用户装完发现没有任何变化。
     flavorDimensions += "edition"
     productFlavors {
         create("base") {
@@ -67,6 +70,11 @@ android {
             applicationId = "com.plantidentify"
             // 显示名沿用 main 里的 app_name，不做覆盖
             buildConfigField("boolean", "FULL_EDITION", "false")
+
+            // 这一轮的功能新增（识别任务队列、数据清洗）全是完整版专属，
+            // 基础版代码没有面向用户的变化 —— 保持 1.0.0 不动
+            versionCode = 1
+            versionName = "1.0.0"
         }
         create("full") {
             dimension = "edition"
@@ -75,6 +83,11 @@ android {
             // resValue 会在生成的 res 里再造一份 app_name，与 main 的那份
             // 同名资源在合并期谁赢取决于源集优先级，不如直接声明一个覆盖源集清楚）
             buildConfigField("boolean", "FULL_EDITION", "true")
+
+            // versionCode 必须**大于上一版**（1 → 2），否则已装 v1.0.0-full
+            // 的用户升不上来（同版本号只能靠 adb -r 强装，正常分发不接受）
+            versionCode = 2
+            versionName = "1.0.1"
         }
     }
 

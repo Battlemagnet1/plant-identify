@@ -62,17 +62,22 @@ if "--edition" in _argv:
     EDITION = _argv[_i + 1]
     del _argv[_i:_i + 2]
 
+# 每个版本的 (包名, 显示名, versionName, versionCode)。
+#
+# versionName 曾经是**全局**的一个常量（那时两个包共用 1.0.0）。
+# 现在版本号按 flavor 各自递增（完整版加了功能就跳，基础版没加就不跳），
+# 它就必须跟着 edition 走 —— 写死成全局常量会让自检在基础版上永远失败，
+# 或者更糟：永远通过一个错误的期望值。
 EDITIONS = {
-    "base": ("com.plantidentify", "Plant Identify Library"),
-    "full": ("com.plantidentify.full", "Plant Identify Library（完整版）"),
+    "base": ("com.plantidentify", "Plant Identify Library", "1.0.0", "1"),
+    "full": ("com.plantidentify.full", "Plant Identify Library（完整版）", "1.0.1", "2"),
 }
 if EDITION not in EDITIONS:
     print(f"未知版本 {EDITION}，可选：{', '.join(EDITIONS)}", file=sys.stderr)
     sys.exit(2)
 
-# 与 app/build.gradle.kts 保持一致
-EXPECT_PACKAGE, EXPECT_LABEL = EDITIONS[EDITION]
-EXPECT_VERSION_NAME = "1.0.0"
+# 与 app/build.gradle.kts 的两个 flavor 块保持一致
+EXPECT_PACKAGE, EXPECT_LABEL, EXPECT_VERSION_NAME, EXPECT_VERSION_CODE = EDITIONS[EDITION]
 DEFAULT_APK = os.path.join(
     REPO, "app", "build", "outputs", "apk", EDITION, "release",
     f"app-{EDITION}-release.apk",
@@ -255,6 +260,13 @@ if aapt2:
     check(f"versionName 为 {EXPECT_VERSION_NAME}",
           bool(vname) and vname.group(1) == EXPECT_VERSION_NAME,
           f"实际 {vname.group(1) if vname else '解析失败'}")
+    # 也断言 versionCode：它才是**覆盖升级**的判据，versionName 只是给人看的。
+    # 完整版的 versionCode 必须大于上一版，否则老用户升不上来 ——
+    # 这一条靠人记得很容易漏，交给脚本更稳（漏了的表现是「装完还是旧版本」，
+    # 而那时包已经发出去了）
+    check(f"versionCode 为 {EXPECT_VERSION_CODE}",
+          bool(vcode) and vcode.group(1) == EXPECT_VERSION_CODE,
+          f"实际 {vcode.group(1) if vcode else '解析失败'}")
     check(f"应用显示名为 {EXPECT_LABEL}",
           bool(label) and label.group(1) == EXPECT_LABEL,
           f"实际 {label.group(1) if label else '解析失败'}")

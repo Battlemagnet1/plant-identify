@@ -54,6 +54,14 @@ object Routes {
      */
     const val TRASH = "trash"
 
+    /**
+     * 压测工具（Phase 4）。
+     *
+     * **只在 debug 构建里注册**（见 NavHost）—— 它不属于产品功能，
+     * 发布包里连这条路由都不存在。
+     */
+    const val STRESS_TOOL = "stress_tool"
+
     private const val ARG_ISSUE_ID = "issueId"
 
     /**

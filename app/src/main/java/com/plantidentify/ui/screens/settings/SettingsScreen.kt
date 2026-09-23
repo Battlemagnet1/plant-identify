@@ -72,6 +72,7 @@ fun SettingsScreen(
     onBack: () -> Unit,
     onOpenDataManagement: () -> Unit,
     onOpenCleaning: () -> Unit,
+    onOpenStressTool: () -> Unit,
     viewModel: SettingsViewModel,
     modifier: Modifier = Modifier,
 ) {
@@ -381,6 +382,15 @@ fun SettingsScreen(
                 item {
                     CleaningEntry(onOpen = onOpenCleaning)
                 }
+
+                // 压测工具（Phase 4）：只有调试构建才出现。
+                // 显式给 key —— LazyColumn 里「有条件地少一个 item」是允许的，
+                // 但 key 能让它不依赖位置索引
+                if (BuildConfig.DEBUG) {
+                    item(key = "stress_tool") {
+                        StressToolEntry(onOpen = onOpenStressTool)
+                    }
+                }
             }
 
             item {
@@ -467,6 +477,46 @@ private fun CleaningEntry(onOpen: () -> Unit) {
                 )
                 Text(
                     text = "检查缺失字段、异常坐标、重复照片与疑似重复的档案",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Text(
+                text = "›",
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/**
+ * 压测工具入口（仅调试构建）。
+ *
+ * 副标题直接写明它会写多少数据 —— 这一页不是什么「高级设置」，
+ * 点下去会产生上万条档案与照片，事先说清楚比事后解释强。
+ */
+@Composable
+private fun StressToolEntry(onOpen: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        onClick = onOpen,
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "压测工具（调试）",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Text(
+                    text = "生成 100 / 1000 / 10000 条测试数据，用于性能压测",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
