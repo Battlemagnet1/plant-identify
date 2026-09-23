@@ -28,6 +28,17 @@ data class CandidateResult(
 
     /** 候选对被硬上限截断（界面要提示「本次为部分扫描」） */
     val partial: Boolean,
+
+    /**
+     * 因为倒排表过长被整段丢弃、**因而没有参与任何两两比对**的档案数。
+     *
+     * 这个数字必须传出去，否则「候选为空」会有两种完全不同的含义
+     * 而界面分不出来：真的不重复，还是它们全被丢掉了。
+     * 2026-09-23 的 10000 株压测就是后者 —— 12 个物种每个约 833 条，
+     * 全部倒排表都超过 [MAX_POSTING_LIST] 被丢弃，候选集为 0，
+     * 而清洗中心显示「100 分 · 数据很干净」。
+     */
+    val skippedRecords: Int = 0,
 )
 
 /**
@@ -49,6 +60,13 @@ data class CandidateResult(
  *    靠名称索引永远找不到，必须单独分桶
  * 3. **共享 ≥ 1 个二元组且 nameSimilarity ≥ 0.55** —— 召回兜底，
  *    代价是要算相似度，所以先用「共享 ≥1」把范围压住
+ *
+ * ## 漏掉的部分必须能被上层看见
+ *
+ * 前两层靠「倒排表太长就整段丢弃」来压住计算量，于是**同一批档案可能
+ * 一个候选都不产生**——那不是「它们不重复」，而是「它们没被比较过」。
+ * 两者的区别对用户是决定性的（前者可以放心，后者不能），所以这里把
+ * [CandidateResult.skippedRecords] 一起交出去，由界面如实说明。
  */
 object CandidateSetBuilder {
 
@@ -119,13 +137,23 @@ object CandidateSetBuilder {
             genusIndex.getOrPut(genus) { mutableListOf() }.add(i)
         }
 
+        // 被整段丢弃的倒排表让一部分档案**根本没参与比对**。
+        // 这里同时记住「进过保留列表的」和「只出现在被丢弃列表里的」，
+        // 差集就是这一轮真正漏掉的档案（见 CandidateResult.skippedRecords）。
+        val enumerated = HashSet<Int>()
+        val onlyDropped = HashSet<Int>()
+
         // 累积每个候选对的共享二元组数。键把两个 id 打包成一个 Long ——
         // 用 Pair 作键会让这个百万级的 map 撑爆内存
         val shared = HashMap<Long, Int>()
         val genusSame = HashSet<Long>()
 
         for ((_, list) in gramIndex) {
-            if (list.size > maxPostingList) continue
+            if (list.size > maxPostingList) {
+                onlyDropped.addAll(list)
+                continue
+            }
+            enumerated.addAll(list)
             for (x in list.indices) {
                 for (y in x + 1 until list.size) {
                     val key = pack(records[list[x]].id, records[list[y]].id) ?: continue
@@ -135,7 +163,11 @@ object CandidateSetBuilder {
         }
 
         for ((_, list) in genusIndex) {
-            if (list.size > maxPostingList) continue
+            if (list.size > maxPostingList) {
+                onlyDropped.addAll(list)
+                continue
+            }
+            enumerated.addAll(list)
             for (x in list.indices) {
                 for (y in x + 1 until list.size) {
                     val key = pack(records[list[x]].id, records[list[y]].id) ?: continue
@@ -143,6 +175,8 @@ object CandidateSetBuilder {
                 }
             }
         }
+
+        onlyDropped.removeAll(enumerated)
 
         // ---------------- 判定哪些对真的是候选 ----------------
         val byId = records.associateBy { it.id }
@@ -197,6 +231,7 @@ object CandidateSetBuilder {
             totalBeforeCap = total,
             totalRecords = records.size,
             partial = partial,
+            skippedRecords = onlyDropped.size,
         )
     }
 

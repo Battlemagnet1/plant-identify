@@ -58,6 +58,15 @@ data class CleaningRunSummary(
     /** 候选集被硬上限截断，本次只是部分扫描 */
     val partialScan: Boolean,
 
+    /**
+     * 因为倒排表过长被丢弃、因而**没有参与任何两两比对**的档案数。
+     *
+     * 与 [partialScan] 是两件不同的事：那个是「候选太多、截断了一部分」，
+     * 这个是「候选压根没生成出来」。后者更危险 —— 它的表现与
+     * 「查过了，一条都不重复」完全一样。
+     */
+    val skippedRecords: Int,
+
     val deepScan: Boolean,
 
     val durationMs: Long,
@@ -126,6 +135,7 @@ class CleaningOrchestrator(
                 resolvedIssues = 0,
                 aiPending = countAiPending(),
                 partialScan = false,
+                skippedRecords = 0,
                 deepScan = forceDeep,
                 durationMs = System.currentTimeMillis() - started,
             )
@@ -229,6 +239,7 @@ class CleaningOrchestrator(
             resolvedIssues = resolved,
             aiPending = countAiPending(),
             partialScan = candidateResult.partial,
+            skippedRecords = candidateResult.skippedRecords,
             deepScan = forceDeep,
             durationMs = System.currentTimeMillis() - started,
         )

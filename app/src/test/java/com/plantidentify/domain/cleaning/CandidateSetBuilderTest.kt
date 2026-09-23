@@ -12,8 +12,12 @@ import org.junit.Test
  * - 「该找到的必须找到」：共享二元组、同属不同名、一字之差
  * - 「该砍掉的必须砍掉」：只有高频字相同、长度差很大的名字
  *
- * 另外钉一条**已知的取舍**（见最后一个用例）：为了不让 O(N²) 拖垮界面，
+ * 另外钉一条**已知的取舍**（见最后几个用例）：为了不让 O(N²) 拖垮界面，
  * 超高频的二元组会被整段丢弃 —— 代价是同名档案超过阈值时不再两两比较。
+ *
+ * 而这个「代价」必须能被上层看见：`skippedRecords > 0` 的意思是
+ * 「有这么多株压根没被比较过」，界面要说出来，不能让它长得像
+ * 「查过了，一条都不重复」。2026-09-23 的 10000 株压测就是栽在这里。
  */
 class CandidateSetBuilderTest {
 
@@ -141,12 +145,44 @@ class CandidateSetBuilderTest {
         // 这是有意为之：真实数据里不会出现几百条完全同名的档案；
         // 真出现了，用户需要的是「搜索 + 批量处理」，而不是三百条
         // 两两比对的提示卡片。取舍写在这里，改阈值前先读一遍。
+        //
+        // 但**「没有候选」绝不能等于「没有问题」**：这些株一对比都没做过，
+        // 所以 skippedRecords 必须如实报出来（2026-09-23 压测里，10000 株
+        // 时 12 个物种每个约 833 条的倒排表全被丢弃，候选集为 0，
+        // 而界面显示「100 分 · 数据很干净」）。
         val records = (1L..301L).map { rec(it, "测试植物") }
         val result = CandidateSetBuilder.build(records)
 
         assertTrue("同名超阈值后不再产生候选", result.pairs.isEmpty())
         assertEquals(301, result.totalRecords)
-        assertFalse(result.partial)
+        assertFalse("不是被候选数上限截断的", result.partial)
+        assertEquals("301 株全都只出现在被丢弃的倒排表里", 301, result.skippedRecords)
+    }
+
+    @Test
+    fun `正常规模下没有档案被漏掉`() {
+        // 反面的钉子：没触发丢弃时必须报 0，否则界面会对每一份干净的库
+        // 都挂一句「有 N 株没能参与比对」，提示就失去意义了
+        val result = CandidateSetBuilder.build(
+            listOf(rec(1, "悬铃木"), rec(2, "悬铃树"), rec(3, "紫薇")),
+        )
+        assertEquals(0, result.skippedRecords)
+    }
+
+    @Test
+    fun `一部分倒排表被丢弃时只报真正漏掉的那些株`() {
+        // 4 条同名（二元组超频被丢）+ 2 条共享稀有二元组的名字。
+        // 「悬铃木甲」「悬铃木乙」之间有候选，所以它们**没有**被漏掉；
+        // 被漏掉的只有那 4 条同名档案。阈值降到 3 让同名那一组触发丢弃。
+        val records = listOf(
+            rec(1, "测试植物"), rec(2, "测试植物"), rec(3, "测试植物"), rec(4, "测试植物"),
+            rec(5, "悬铃木甲"), rec(6, "悬铃木乙"),
+        )
+        val result = CandidateSetBuilder.build(records, maxPostingList = 3)
+
+        assertEquals(1, result.pairs.size)
+        assertEquals(5L to 6L, result.pairs.single().let { it.aId to it.bId })
+        assertEquals("只有那 4 条同名档案没参与比对", 4, result.skippedRecords)
     }
 
     @Test
@@ -188,8 +224,12 @@ class CandidateSetBuilderTest {
     fun `降噪阈值可注入 - 小规模也能验证超频字被丢弃`() {
         // 5 条同名档案，把阈值降到 4 → 共享的二元组全部超频被丢弃 → 无候选
         val records = (1L..5L).map { rec(it, "测试植物") }
-        assertTrue(CandidateSetBuilder.build(records, maxPostingList = 4).pairs.isEmpty())
-        // 阈值放到 5 就正常了
-        assertEquals(10, CandidateSetBuilder.build(records, maxPostingList = 5).pairs.size)
+        val dropped = CandidateSetBuilder.build(records, maxPostingList = 4)
+        assertTrue(dropped.pairs.isEmpty())
+        assertEquals("5 株全被漏掉，界面必须说得出这个数字", 5, dropped.skippedRecords)
+        // 阈值放到 5 就正常了，此时一个人都没漏
+        val kept = CandidateSetBuilder.build(records, maxPostingList = 5)
+        assertEquals(10, kept.pairs.size)
+        assertEquals(0, kept.skippedRecords)
     }
 }

@@ -97,61 +97,85 @@ fun DataCleaningScreen(
             return@Scaffold
         }
 
-        LazyColumn(
+        Column(
             modifier = Modifier.fillMaxSize().padding(padding),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            item(key = "health") {
-                HealthCard(state)
-            }
-
-            item(key = "actions") {
-                ActionsCard(
-                    scanning = state.scanning,
-                    advising = state.advising,
-                    pendingAi = state.pendingAi,
-                    onScan = { viewModel.scan(deep = false) },
-                    onDeepScan = { viewModel.scan(deep = true) },
-                    onAdvise = viewModel::advise,
+            // 失败提示钉在 LazyColumn **外面**，不插进列表里。
+            //
+            // 插进列表（哪怕是第 0 项）会被 LazyColumn 的「按键保持位置」吃掉：
+            // 在首个可见项**之前**插入 item 时，它把原来的首项钉在原处不动，
+            // 于是新插入的卡片被整块挤到视口上方 —— 实测正好等于卡片高度
+            // （207px），页面上一条痕迹都看不到，滚一下才露出来。
+            //
+            // 这跟「用 Snackbar」是同一类错误的两种写法：提示必须在用户
+            // 不用做任何动作的前提下就在眼前。
+            state.lastScanError?.let { error ->
+                ScanErrorCard(
+                    text = error,
+                    onDismiss = viewModel::dismissScanError,
+                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp),
                 )
             }
 
-            if (state.issues.isEmpty()) {
-                item(key = "empty") {
-                    EmptyCard(state.health.totalRecords)
+            LazyColumn(
+                modifier = Modifier.weight(1f),
+                contentPadding = PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                item(key = "health") {
+                    HealthCard(state)
                 }
-            } else {
-                item(key = "list-header") {
+
+                item(key = "actions") {
+                    ActionsCard(
+                        scanning = state.scanning,
+                        advising = state.advising,
+                        pendingAi = state.pendingAi,
+                        onScan = { viewModel.scan(deep = false) },
+                        onDeepScan = { viewModel.scan(deep = true) },
+                        onAdvise = viewModel::advise,
+                    )
+                }
+
+                if (state.issues.isEmpty()) {
+                    item(key = "empty") {
+                        EmptyCard(
+                            totalRecords = state.health.totalRecords,
+                            scanFailed = state.lastScanError != null,
+                        )
+                    }
+                } else {
+                    item(key = "list-header") {
+                        Text(
+                            text = "待处理 ${state.issues.size} 项",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.padding(top = 4.dp),
+                        )
+                    }
+                    items(state.issues, key = { it.fingerprint }) { issue ->
+                        IssueCard(
+                            issue = issue,
+                            names = issue.recordIds.mapNotNull { state.snapshots[it]?.name },
+                            // 跳转用的是**问题自己的 id**，不是涉及的档案 id。
+                            // 这两个 id 空间完全无关，混用的后果是「点哪张卡都进同一条问题」
+                            // ——而且看起来还挺合理（确实打开了某个详情页），
+                            // 只有对着具体内容才能发现不对
+                            onOpen = { onOpenIssue(issue.id) },
+                            onMerge = { onOpenMerge(issue.id) },
+                        )
+                    }
+                }
+
+                item(key = "footer") {
                     Text(
-                        text = "待处理 ${state.issues.size} 项",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Medium,
-                        modifier = Modifier.padding(top = 4.dp),
+                        text = "清洗只做提示，任何修改都要你确认后才生效。" +
+                            "被合并或删除的档案进入回收站，可以随时恢复。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 8.dp),
                     )
                 }
-                items(state.issues, key = { it.fingerprint }) { issue ->
-                    IssueCard(
-                        issue = issue,
-                        names = issue.recordIds.mapNotNull { state.snapshots[it]?.name },
-                        // 跳转用的是**问题自己的 id**，不是涉及的档案 id。
-                        // 这两个 id 空间完全无关，混用的后果是「点哪张卡都进同一条问题」
-                        // ——而且看起来还挺合理（确实打开了某个详情页），
-                        // 只有对着具体内容才能发现不对
-                        onOpen = { onOpenIssue(issue.id) },
-                        onMerge = { onOpenMerge(issue.id) },
-                    )
-                }
-            }
-
-            item(key = "footer") {
-                Text(
-                    text = "清洗只做提示，任何修改都要你确认后才生效。" +
-                        "被合并或删除的档案进入回收站，可以随时恢复。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 8.dp),
-                )
             }
         }
     }
@@ -160,6 +184,7 @@ fun DataCleaningScreen(
 @Composable
 private fun HealthCard(state: CleaningUiState) {
     val health = state.health
+    val failed = state.lastScanError != null
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
@@ -182,7 +207,10 @@ private fun HealthCard(state: CleaningUiState) {
                 )
                 Spacer(Modifier.width(12.dp))
                 Text(
-                    text = healthLabel(health.score),
+                    // 分数是「库里现在有多少条待处理问题」的映射。扫描中断时
+                    // 那个数字不代表本次结论 —— 把标签换成事实陈述，
+                    // 免得用户读到「很干净」就放心了
+                    text = if (failed) "上次检查未完成" else healthLabel(health.score),
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.Medium,
                     modifier = Modifier.padding(bottom = 10.dp),
@@ -197,11 +225,15 @@ private fun HealthCard(state: CleaningUiState) {
 
             Spacer(Modifier.height(12.dp))
             Text(
-                text = if (health.openIssues == 0) {
-                    "共 ${health.totalRecords} 株档案，没有发现需要处理的问题"
-                } else {
-                    "共 ${health.totalRecords} 株档案，${health.openIssues} 项待处理，" +
-                        "涉及 ${health.affectedRecords} 株"
+                text = when {
+                    failed ->
+                        "共 ${health.totalRecords} 株档案 · 上一轮检查没有跑完，" +
+                            "所以这里的分数不是本次结论"
+                    health.openIssues == 0 ->
+                        "共 ${health.totalRecords} 株档案，没有发现需要处理的问题"
+                    else ->
+                        "共 ${health.totalRecords} 株档案，${health.openIssues} 项待处理，" +
+                            "涉及 ${health.affectedRecords} 株"
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -294,8 +326,48 @@ private fun ActionsCard(
     }
 }
 
+/**
+ * 扫描没跑完的提示。
+ *
+ * 刻意**不用 Snackbar**：它几秒后自动消失，页面随即恢复成「数据很干净」，
+ * 用户会以为真的查过了 —— 2026-09-23 的 10000 株压测正是这样：全库检查
+ * 在 OOM 里中断，页面显示「100 分 · 数据很干净」，唯一的痕迹是一条
+ * 4 秒的 Snackbar。这一条必须留在页面上，直到用户自己收起。
+ */
 @Composable
-private fun EmptyCard(totalRecords: Int) {
+private fun ScanErrorCard(
+    text: String,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.errorContainer,
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+    ) {
+        Column(modifier = Modifier.padding(18.dp)) {
+            Text(
+                text = "检查未完成",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = text,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+            )
+            Spacer(Modifier.height(4.dp))
+            TextButton(onClick = onDismiss) { Text("知道了") }
+        }
+    }
+}
+
+@Composable
+private fun EmptyCard(totalRecords: Int, scanFailed: Boolean) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
@@ -304,13 +376,18 @@ private fun EmptyCard(totalRecords: Int) {
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
     ) {
         Column(modifier = Modifier.padding(20.dp)) {
-            Text("数据很干净", style = MaterialTheme.typography.titleSmall)
+            Text(
+                text = if (scanFailed) "这次没有结论" else "数据很干净",
+                style = MaterialTheme.typography.titleSmall,
+            )
             Spacer(Modifier.height(6.dp))
             Text(
-                text = if (totalRecords == 0) {
-                    "还没有档案。添加植物后回这里检查。"
-                } else {
-                    "没有发现缺失字段、异常坐标、重复照片或疑似重复的档案。"
+                text = when {
+                    // 「列表为空」在扫描中断时只有一个含义：**没算完**。
+                    // 说成「没有发现问题」是把「不知道」当成了「没问题」
+                    scanFailed -> "检查中途失败了，列表是空的并不代表数据真的干净。"
+                    totalRecords == 0 -> "还没有档案。添加植物后回这里检查。"
+                    else -> "没有发现缺失字段、异常坐标、重复照片或疑似重复的档案。"
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,

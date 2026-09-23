@@ -58,6 +58,17 @@ data class CleaningUiState(
     /** 上次扫描的一句总结（如「检查 17 株，新发现 3 项」） */
     val lastScanNote: String? = null,
 
+    /**
+     * 上一次扫描**没跑完**的原因。成功一次才清掉。
+     *
+     * 它与 [lastScanNote] 的分工是被真机压测逼出来的：那时候失败只在
+     * Snackbar 上冒一下，`consumeMessage()` 紧跟着把它清掉，4 秒后页面
+     * 恢复成「100 分 · 数据很干净」—— 一次 OOM 中断的全库检查与
+     * 「真的没有重复」在界面上一模一样。这种提示必须**留在页面上**，
+     * 直到用户自己收起或者下一次扫描成功。
+     */
+    val lastScanError: String? = null,
+
     val message: String? = null,
 )
 
@@ -101,6 +112,7 @@ class CleaningViewModel(
         val scanning: Boolean = false,
         val advising: Boolean = false,
         val lastScanNote: String? = null,
+        val lastScanError: String? = null,
         val message: String? = null,
     )
 
@@ -133,6 +145,7 @@ class CleaningViewModel(
             // 用户点下去却发现 AI 只是在重复本地已经确定的事
             pendingAi = open.count { it.needsAi && !it.aiUsed },
             lastScanNote = flag.lastScanNote,
+            lastScanError = flag.lastScanError,
             message = flag.message,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), CleaningUiState())
@@ -149,14 +162,23 @@ class CleaningViewModel(
      */
     fun refresh() {
         viewModelScope.launch {
-            val dataset = loader.load()
-            extras.update {
-                it.copy(
-                    loading = false,
-                    snapshots = dataset.byId,
-                    covers = loader.coverPaths(dataset.records.map { record -> record.id }),
-                )
-            }
+            // 读快照本身也可能失败（档案太多时同样会 OOM）。不接住的话
+            // `loading` 永远停在 true —— 页面转圈转到天荒地老，且没有任何提示。
+            runCatching { loader.load() }.fold(
+                onSuccess = { dataset ->
+                    extras.update {
+                        it.copy(
+                            loading = false,
+                            snapshots = dataset.byId,
+                            covers = loader.coverPaths(dataset.records.map { record -> record.id }),
+                        )
+                    }
+                },
+                onFailure = { e ->
+                    extras.update { it.copy(loading = false) }
+                    flags.update { it.copy(lastScanError = scanFailureText(e)) }
+                },
+            )
         }
     }
 
@@ -165,10 +187,11 @@ class CleaningViewModel(
         viewModelScope.launch {
             flags.update { it.copy(scanning = true) }
             val summary = runCatching { orchestrator.run(deep = deep) }
-            flags.update { it.copy(scanning = false) }
-
             flags.update {
                 it.copy(
+                    scanning = false,
+                    // 成功时 exceptionOrNull() 为 null → 顺手把上次的失败清掉
+                    lastScanError = summary.exceptionOrNull()?.let(::scanFailureText),
                     lastScanNote = summary.fold(
                         onSuccess = { s ->
                             describe(
@@ -177,15 +200,37 @@ class CleaningViewModel(
                                 added = s.newIssues,
                                 resolved = s.resolvedIssues,
                                 partial = s.partialScan,
+                                skipped = s.skippedRecords,
                             )
                         },
-                        onFailure = { e -> "检查失败：${e.message ?: "未知错误"}" },
+                        // 失败已经由页面上的卡片持久呈现，不再多发一条会消失的提示
+                        onFailure = { null },
                     ),
                 )
             }
             // 扫描可能带来了新的档案（快照要重取）；问题列表由 Flow 自己更新
             refresh()
         }
+    }
+
+    /** 用户确认看过之后收起失败提示（下一次扫描无论成败都会重设） */
+    fun dismissScanError() {
+        flags.update { it.copy(lastScanError = null) }
+    }
+
+    /**
+     * 把扫描失败翻译成用户**能据此行动**的一句话。
+     *
+     * `OutOfMemoryError.message` 是 null —— 直接拼 `${e.message}` 会得到
+     * 「检查失败：null」，用户除了困惑什么也做不了（2026-09-23 真机压测
+     * 10000 株时正是如此）。所以按异常类型给一句有信息量的话。
+     */
+    private fun scanFailureText(e: Throwable): String = when (e) {
+        is OutOfMemoryError ->
+            "本次检查没有跑完：档案或照片太多，本机内存不够。" +
+                "下面的结果是上一次检查留下的，不代表现在是干净的 —— " +
+                "可以先试「开始检查」（只查上次之后改过的档案，需要的内存少得多）。"
+        else -> "本次检查没有跑完：${e.message ?: e::class.simpleName ?: "未知错误"}"
     }
 
     /**
@@ -251,11 +296,15 @@ class CleaningViewModel(
         added: Int,
         resolved: Int,
         partial: Boolean,
+        skipped: Int,
     ): String = buildString {
         append(if (deep) "全库检查" else "检查")
         append(" $checked 株：新增 $added 项")
         if (resolved > 0) append("，自动结案 $resolved 项")
         if (partial) append("（候选过多，本次为部分扫描）")
+        // 与「候选过多」要分开说：这一种不是「截断了一部分」，
+        // 而是「这些株压根没被比较过」——名字太集中时它们会一个候选都生不出来
+        if (skipped > 0) append("（有 $skipped 株名称过于集中，没能参与两两比对）")
     }
 
     /**
