@@ -6,19 +6,31 @@ on:
       - main
   pull_request:
   workflow_dispatch:
+    inputs:
+      release_type:
+        description: 发行类型
+        required: true
+        default: 预览发行版
+        type: choice
+        options:
+          - 预览发行版
+          - 正式发行版
 
 permissions:
   actions: read
   contents: read
 
 concurrency:
-  group: android-ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: android-ci-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      version_name: ${{ steps.version.outputs.version_name }}
+      version_code: ${{ steps.version.outputs.version_code }}
 
     steps:
       - name: Check out repository
@@ -107,6 +119,7 @@ jobs:
           path: dist/plant-identify-base-${{ steps.version.outputs.version_name }}.apk
           if-no-files-found: error
           compression-level: 0
+          retention-days: 1
 
       - name: Upload full APK
         uses: actions/upload-artifact@v7
@@ -115,3 +128,61 @@ jobs:
           path: dist/plant-identify-full-${{ steps.version.outputs.version_name }}.apk
           if-no-files-found: error
           compression-level: 0
+          retention-days: 1
+
+  publish-release:
+    if: github.event_name == 'workflow_dispatch'
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: write
+
+    steps:
+      - name: Download base APK
+        uses: actions/download-artifact@v8
+        with:
+          name: plant-identify-base-${{ needs.build-and-test.outputs.version_name }}
+          path: dist
+
+      - name: Download full APK
+        uses: actions/download-artifact@v8
+        with:
+          name: plant-identify-full-${{ needs.build-and-test.outputs.version_name }}
+          path: dist
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_VERSION_NAME: ${{ needs.build-and-test.outputs.version_name }}
+          RELEASE_TYPE: ${{ inputs.release_type }}
+        run: |
+          set -euo pipefail
+
+          tag="v$BUILD_VERSION_NAME"
+          release_args=(
+            "$tag"
+            "dist/plant-identify-base-$BUILD_VERSION_NAME.apk"
+            "dist/plant-identify-full-$BUILD_VERSION_NAME.apk"
+            --repo "$GITHUB_REPOSITORY"
+            --target "$GITHUB_SHA"
+            --title "Plant Identify $BUILD_VERSION_NAME"
+            --generate-notes
+          )
+
+          case "$RELEASE_TYPE" in
+            预览发行版)
+              release_args+=(--prerelease --latest=false)
+              ;;
+            正式发行版)
+              release_args+=(--latest)
+              ;;
+            *)
+              echo "Unknown release type: $RELEASE_TYPE" >&2
+              exit 1
+              ;;
+          esac
+
+          gh release create "${release_args[@]}"
+          echo "Release: https://github.com/$GITHUB_REPOSITORY/releases/tag/$tag" >> "$GITHUB_STEP_SUMMARY"
