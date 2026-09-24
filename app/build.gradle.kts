@@ -10,6 +10,17 @@ plugins {
     alias(libs.plugins.ksp)
 }
 
+val ciVersionName = providers.gradleProperty("ciVersionName").orNull
+val ciVersionCodeProperty = providers.gradleProperty("ciVersionCode").orNull
+val ciVersionCode = ciVersionCodeProperty?.toIntOrNull()
+
+require(ciVersionCodeProperty == null || ciVersionCode != null) {
+    "ciVersionCode must be an integer"
+}
+require((ciVersionName == null) == (ciVersionCode == null)) {
+    "ciVersionName and ciVersionCode must be provided together"
+}
+
 // ---------- 发布签名 ----------
 // 密钥与口令存在仓库之外：仓库根目录的 keystore.properties（已被 .gitignore 排除），
 // 密钥本体放在用户目录下。这样「仓库将来转公开」时不会连带泄露签名身份。
@@ -71,10 +82,9 @@ android {
             // 显示名沿用 main 里的 app_name，不做覆盖
             buildConfigField("boolean", "FULL_EDITION", "false")
 
-            // 这一轮的功能新增（识别任务队列、数据清洗）全是完整版专属，
-            // 基础版代码没有面向用户的变化 —— 保持 1.0.0 不动
-            versionCode = 1
-            versionName = "1.0.0"
+            // 本地构建保留已发布的版本号；CI 会注入日期版本号。
+            versionCode = ciVersionCode ?: 1
+            versionName = ciVersionName ?: "1.0.0"
         }
         create("full") {
             dimension = "edition"
@@ -84,10 +94,9 @@ android {
             // 同名资源在合并期谁赢取决于源集优先级，不如直接声明一个覆盖源集清楚）
             buildConfigField("boolean", "FULL_EDITION", "true")
 
-            // versionCode 必须**大于上一版**（1 → 2），否则已装 v1.0.0-full
-            // 的用户升不上来（同版本号只能靠 adb -r 强装，正常分发不接受）
-            versionCode = 2
-            versionName = "1.0.1"
+            // 本地构建保留已发布的版本号；CI 注入的 versionCode 会跨日递增。
+            versionCode = ciVersionCode ?: 2
+            versionName = ciVersionName ?: "1.0.1"
         }
     }
 
