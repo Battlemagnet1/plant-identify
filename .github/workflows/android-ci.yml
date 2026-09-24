@@ -36,7 +36,7 @@ jobs:
         uses: gradle/actions/setup-gradle@v6
 
       - name: Install Android SDK platform
-        run: sdkmanager "platforms;android-37"
+        run: sdkmanager --channel=3 "platforms;android-37"
 
       - name: Run unit tests and build debug APKs
         run: bash ./gradlew test assembleDebug --stacktrace
