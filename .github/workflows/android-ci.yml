@@ -51,11 +51,11 @@ jobs:
           day_end=$(date -u -d "@$end_epoch" +%Y-%m-%dT%H:%M:%SZ)
 
           runs=$(gh api --method GET --paginate --slurp \
-            "repos/$GITHUB_REPOSITORY/actions/workflows/android-ci.yml/runs" \
+            "repos/$GITHUB_REPOSITORY/actions/runs" \
             -f per_page=100 \
             -f created="$day_start..$day_end")
           sequence=$(jq --argjson current "$GITHUB_RUN_NUMBER" \
-            '[.[].workflow_runs[].run_number | select(. < $current)] | unique | length + 1' \
+            '[.[].workflow_runs[] | select(.name == "Android CI") | .run_number | select(. < $current)] | unique | length + 1' \
             <<<"$runs")
 
           if (( sequence > 999 )); then
