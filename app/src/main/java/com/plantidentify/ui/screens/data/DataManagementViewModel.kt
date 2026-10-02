@@ -12,6 +12,8 @@ import com.plantidentify.data.backup.BackupManifest
 import com.plantidentify.data.export.DataExporter
 import com.plantidentify.data.export.ExportEstimate
 import com.plantidentify.data.export.ExportMode
+import com.plantidentify.data.export.PdfReportBuilder
+import com.plantidentify.data.export.PdfReportFactory
 import com.plantidentify.data.export.formatBytes
 import com.plantidentify.data.import.ImportExecutor
 import com.plantidentify.data.location.LocationProvider
@@ -25,6 +27,9 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /** 数据管理页上正在进行的任务 */
 sealed interface DataTask {
@@ -83,6 +88,7 @@ class DataManagementViewModel(
     private val locationSettingsStore: LocationSettingsStore,
     private val locationProvider: LocationProvider,
     private val importExecutor: ImportExecutor,
+    private val pdfBuilder: PdfReportBuilder,
 ) : ViewModel() {
 
     private val _task = MutableStateFlow<DataTask>(DataTask.Idle)
@@ -233,6 +239,45 @@ class DataManagementViewModel(
             }.onFailure { error ->
                 _task.value = DataTask.Failed(error.message ?: "导出失败，请重试")
             }
+        }
+    }
+
+    /**
+     * 导出植物档案 PDF（v1.0.2 Phase 2 §十四）。
+     *
+     * 与 HTML 导出的区别不只是格式：HTML 是**可在浏览器里翻的网页**，
+     * PDF 是**能直接打印/上交的报告**。所以这里不做体积分级策略 ——
+     * 一份 PDF 该多大就多大，缩图只会让它不像正式文件。
+     *
+     * 单次导出打成一份文件（全部植物），而不是每种植物一个文件：
+     * 用户要的是「一份报告」，几十个文件在手机上根本没法用。
+     */
+    fun exportPdf() {
+        if (_task.value is DataTask.Running) return
+        viewModelScope.launch {
+            _task.value = DataTask.Running("正在生成 PDF…", null)
+            val archive = repository.loadArchive()
+            if (archive.isEmpty()) {
+                _task.value = DataTask.Failed("还没有植物档案，没有可导出的内容")
+                return@launch
+            }
+
+            val report = PdfReportFactory.allPlantsReport(archive)
+            val stamp = SimpleDateFormat("yyyy-MM-dd_HHmm", Locale.US).format(Date())
+            val file = File(pdfBuilder.exportDir(), "plantIdentify_报告_$stamp.pdf")
+
+            pdfBuilder.build(report, file)
+                .onSuccess {
+                    val sizeText = formatBytes(it.length())
+                    _task.value = DataTask.Done(
+                        message = "PDF 已生成：${archive.size} 种植物 · $sizeText",
+                        filePath = it.absolutePath,
+                        fileName = it.name,
+                    )
+                }
+                .onFailure { error ->
+                    _task.value = DataTask.Failed("生成 PDF 失败：${error.message ?: "未知原因"}")
+                }
         }
     }
 
@@ -402,6 +447,7 @@ class DataManagementViewModel(
             locationSettingsStore: LocationSettingsStore,
             locationProvider: LocationProvider,
             importExecutor: ImportExecutor,
+            pdfBuilder: PdfReportBuilder,
         ): ViewModelProvider.Factory = viewModelFactory {
             initializer {
                 DataManagementViewModel(
@@ -411,6 +457,7 @@ class DataManagementViewModel(
                     locationSettingsStore,
                     locationProvider,
                     importExecutor,
+                    pdfBuilder,
                 )
             }
         }

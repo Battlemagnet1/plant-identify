@@ -247,6 +247,7 @@ fun PlantIdentifyNavHost(
                     locationSettingsStore = container.locationSettingsStore,
                     locationProvider = container.locationProvider,
                     importExecutor = container.importExecutor,
+                    pdfBuilder = container.pdfReportBuilder,
                 ),
             )
             DataManagementScreen(

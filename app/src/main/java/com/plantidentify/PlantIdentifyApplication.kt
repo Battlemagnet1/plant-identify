@@ -15,6 +15,7 @@ import com.plantidentify.data.ai.VisionProvider
 import com.plantidentify.data.backup.BackupManager
 import com.plantidentify.data.draft.CaptureDraftStore
 import com.plantidentify.data.export.DataExporter
+import com.plantidentify.data.export.PdfReportBuilder
 import com.plantidentify.data.export.ReportThumbnailer
 import com.plantidentify.data.image.ImageCompressor
 import com.plantidentify.data.import.ImportExecutor
@@ -158,6 +159,17 @@ class AppContainer(context: Context) {
             imageStore = imageStore,
             thumbnailer = reportThumbnailer,
         )
+    }
+
+    /**
+     * PDF 报告生成（v1.0.2 Phase 2 §十四）。
+     *
+     * 与 [dataExporter] 分开：HTML 有「缩略图 / 原图」三级体积策略
+     * （怕网页太大在手机上打不开），而 PDF 是**打印件**，不做分级 ——
+     * 缩图只会让它不像一份正式报告。
+     */
+    val pdfReportBuilder: PdfReportBuilder by lazy {
+        PdfReportBuilder(context = appContext, imageStore = imageStore)
     }
 
     /**

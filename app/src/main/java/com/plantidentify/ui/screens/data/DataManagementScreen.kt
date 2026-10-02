@@ -204,6 +204,25 @@ fun DataManagementScreen(
                 onExport = viewModel::exportHtml,
             )
 
+            // PDF 报告（v1.0.2 Phase 2 §十四）。
+            //
+            // 与 HTML 导出并列、但**不并进同一个卡片**：两者用途不同 ——
+            // HTML 是「在电脑浏览器里翻的网页」，PDF 是「能直接打印/上交的报告」。
+            // 混在一起会让人以为只是格式差别，而它们连体积策略都不一样。
+            SectionCard(title = "导出 PDF 报告") {
+                Text(
+                    text = "把全部植物档案导出成一份 A4 排版的 PDF：字段表格、照片网格、" +
+                        "观察记录，自动分页并带页码 —— 可以直接打印或交给别人。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(10.dp))
+                Button(
+                    onClick = viewModel::exportPdf,
+                    enabled = task !is DataTask.Running,
+                ) { Text("生成 PDF") }
+            }
+
             BackupCard(
                 running = task is DataTask.Running,
                 backups = backups,
