@@ -5,8 +5,10 @@ import androidx.room.RoomDatabase
 import com.plantidentify.data.local.dao.CleaningIssueDao
 import com.plantidentify.data.local.dao.CleaningStateDao
 import com.plantidentify.data.local.dao.FolderDao
+import com.plantidentify.data.local.dao.FolderImportDao
 import com.plantidentify.data.local.dao.FolderPlantDao
 import com.plantidentify.data.local.dao.ImageFingerprintDao
+import com.plantidentify.data.local.dao.LandscapeFolderDataDao
 import com.plantidentify.data.local.dao.ObservationImageDao
 import com.plantidentify.data.local.dao.PlantObservationDao
 import com.plantidentify.data.local.dao.PlantRecordDao
@@ -15,6 +17,8 @@ import com.plantidentify.data.local.dao.RecognitionTaskImageDao
 import com.plantidentify.data.local.entity.CleaningIssueEntity
 import com.plantidentify.data.local.entity.CleaningStateEntity
 import com.plantidentify.data.local.entity.FolderEntity
+import com.plantidentify.data.local.entity.FolderImportDataEntity
+import com.plantidentify.data.local.entity.FolderImportItemEntity
 import com.plantidentify.data.local.entity.FolderPlantEntity
 import com.plantidentify.data.local.entity.ImageFingerprintEntity
 import com.plantidentify.data.local.entity.LandscapeFolderDataEntity
@@ -39,8 +43,13 @@ import com.plantidentify.data.local.entity.RecognitionTaskImageEntity
  *
  * ```
  * plant_record ──N:M── folder_plant ──N── folder
- *                                            └── landscape_folder_data（1:1 扩展）
+ *                                            ├── landscape_folder_data（1:1，景观用）
+ *                                            └── folder_import_data（1:1，导入用，v9）
+ *                                                     └── folder_import_item（导入逐条状态，v9）
  * ```
+ *
+ * 规律是：**`folder` 保持通用，各类型的专属字段各自一张 1:1 扩展表** ——
+ * 以后再加文件夹类型就是再加一张扩展表，不动主表。
  *
  * 关键区别：**folder 与 plant_record 之间只有「关联」，没有「归属」** ——
  * 删文件夹不会影响任何植物档案（没有任何从 folder 指向 plant_record 的外键）。
@@ -66,8 +75,10 @@ import com.plantidentify.data.local.entity.RecognitionTaskImageEntity
         FolderEntity::class,
         FolderPlantEntity::class,
         LandscapeFolderDataEntity::class,
+        FolderImportDataEntity::class,
+        FolderImportItemEntity::class,
     ],
-    version = 8,
+    version = 9,
     exportSchema = true,
 )
 abstract class PlantIdentifyDatabase : RoomDatabase() {
@@ -111,12 +122,29 @@ abstract class PlantIdentifyDatabase : RoomDatabase() {
      * 注意 [FolderPlantDao] 里没有任何语句会写 `plant_record`：
      * 「删文件夹不删植物」在 DAO 这一层就是结构性保证。
      *
-     * 景观扩展表 [LandscapeFolderDataEntity] **刻意没有 DAO** ——
-     * 本阶段只把结构建好，读写它的代码属于 Phase 3。
+     * 景观扩展表 [LandscapeFolderDataEntity] 的 DAO 在 **Phase 2 才建** ——
+     * Phase 1 的注释写的是「本阶段只把结构建好」，那时确实没有调用方；
+     * Phase 2 的备份需要读它（景观数据不随备份走的话，
+     * 用户换机后景观文件夹会退化成普通文件夹），它才成为必要。
      */
     abstract fun folderDao(): FolderDao
 
     abstract fun folderPlantDao(): FolderPlantDao
+
+    abstract fun landscapeFolderDataDao(): LandscapeFolderDataDao
+
+    /**
+     * 协作文件夹的导入数据（v9 新增，v1.0.2 Phase 2）。
+     *
+     * [FolderImportDataEntity] 记录「这批数据从哪来、导入了多少、处理到哪一步」，
+     * [FolderImportItemEntity] 记录**每一条导入植物**的处理状态
+     * （待确认 / 已合并 / 保留为新）。
+     *
+     * 同样地，这里没有任何语句会写 `plant_record` ——
+     * 导入合并走的是既有的软删合并路径（`PlantRepository.mergeInto`），
+     * 不会物理删除任何植物。
+     */
+    abstract fun folderImportDao(): FolderImportDao
 
     companion object {
         const val NAME = "plant_identify.db"

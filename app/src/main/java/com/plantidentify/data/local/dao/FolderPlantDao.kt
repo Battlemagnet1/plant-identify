@@ -60,6 +60,16 @@ interface FolderPlantDao {
     @Query("SELECT folderId FROM folder_plant WHERE plantId = :plantId")
     suspend fun getFolderIdsForPlant(plantId: Long): List<Long>
 
+    /**
+     * 读取全部关联行（备份用）。
+     *
+     * ⚠️ 这里**刻意不过滤 `deletedAt`** —— 备份要的是原始数据本身，
+     * 软删过滤是「展示查询」才该做的事。少备份几条关联，
+     * 恢复后文件夹里就会凭空少几个成员，而且不会有任何报错。
+     */
+    @Query("SELECT * FROM folder_plant")
+    suspend fun getAll(): List<FolderPlantEntity>
+
     /** 文件夹内的全部 plantId（「全选」与「移动」用） */
     @Query(
         """

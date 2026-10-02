@@ -368,6 +368,68 @@ object Migrations {
     }
 
     /**
+     * 8 → 9：协作文件夹的导入数据（v1.0.2 Phase 2）。
+     *
+     * 纯增量，**不动任何既有表** —— 与 7→8 同样是「只加新表」。
+     *
+     * ## 两张表的分工
+     *
+     * - `folder_import_data`（1:1，主键即 folderId）：这批数据从哪来、
+     *   什么时候导的、导入多少条、处理了多少条
+     * - `folder_import_item`（复合主键）：**每一条**导入植物的处理状态 ——
+     *   待确认 / 已自动入库 / 已合并 / 用户选择保留
+     *
+     * ## 为什么 item 表要有 `importPlantId` 外键指向 plant_record
+     *
+     * 导入的实现是「先把数据插进主库、再按需合并」，所以每条导入数据
+     * 在库里都是一个真实的 PlantRecord。加了 CASCADE 之后，
+     * 用户在回收站里彻底删掉那条植物时，这条状态记录会一起消失 ——
+     * 这是对的（没有植物了，也就没有「它的处理状态」）。
+     *
+     * 注意 `matchedPlantId` **刻意没有外键**：它记录「曾经合并进哪条记录」，
+     * 是历史，不该因为那条记录后来被清理而消失。
+     */
+    val MIGRATION_8_9: Migration = object : Migration(8, 9) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            // ① 导入元信息（1:1）
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `folder_import_data` (" +
+                    "`folderId` INTEGER NOT NULL, " +
+                    "`sourceName` TEXT NOT NULL, " +
+                    "`importedAt` INTEGER NOT NULL, " +
+                    "`sourceFileName` TEXT, " +
+                    "`totalCount` INTEGER NOT NULL, " +
+                    "`handledCount` INTEGER NOT NULL, " +
+                    "`rawPackagePath` TEXT, " +
+                    "`lastMergedAt` INTEGER, " +
+                    "PRIMARY KEY(`folderId`), " +
+                    "FOREIGN KEY(`folderId`) REFERENCES `folder`(`id`) " +
+                    "ON UPDATE NO ACTION ON DELETE CASCADE )",
+            )
+
+            // ② 逐条处理状态。复合主键 = 「同一条导入数据在同一文件夹里只有一条状态」
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `folder_import_item` (" +
+                    "`folderId` INTEGER NOT NULL, " +
+                    "`importPlantId` INTEGER NOT NULL, " +
+                    "`status` TEXT NOT NULL, " +
+                    "`matchedPlantId` INTEGER, " +
+                    "`matchLevel` INTEGER, " +
+                    "`decidedAt` INTEGER, " +
+                    "PRIMARY KEY(`folderId`, `importPlantId`), " +
+                    "FOREIGN KEY(`folderId`) REFERENCES `folder`(`id`) " +
+                    "ON UPDATE NO ACTION ON DELETE CASCADE , " +
+                    "FOREIGN KEY(`importPlantId`) REFERENCES `plant_record`(`id`) " +
+                    "ON UPDATE NO ACTION ON DELETE CASCADE )",
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_folder_import_item_importPlantId` " +
+                    "ON `folder_import_item` (`importPlantId`)",
+            )
+        }
+    }
+
+    /**
      * 全部迁移，按版本升序。
      *
      * 顺序不能乱 —— Room 会从当前版本开始，逐个往上找能匹配起点的迁移。
@@ -380,5 +442,6 @@ object Migrations {
         MIGRATION_5_6,
         MIGRATION_6_7,
         MIGRATION_7_8,
+        MIGRATION_8_9,
     )
 }

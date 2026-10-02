@@ -23,6 +23,16 @@ interface FolderDao {
     @Insert
     suspend fun insert(folder: FolderEntity): Long
 
+    /**
+     * 批量插入（恢复备份用）。
+     *
+     * 恢复是「整体替换」语义，整表一次插入比逐条快得多。
+     * 主键 `id` 沿用实体自带的值 —— 备份包里存了 id，
+     * 因为 `folder_plant.folderId` 那些关联正是靠它对应起来的。
+     */
+    @Insert
+    suspend fun insertAll(folders: List<FolderEntity>)
+
     @Update
     suspend fun update(folder: FolderEntity)
 
@@ -35,6 +45,17 @@ interface FolderDao {
      */
     @Query("DELETE FROM folder WHERE id = :folderId")
     suspend fun deleteById(folderId: Long)
+
+    /**
+     * 清空整表（恢复备份前调用）。
+     *
+     * **依赖外键级联**：`folder_plant`、`landscape_folder_data`、
+     * `folder_import_data`、`folder_import_item` 都会随 `ON DELETE CASCADE`
+     * 一起清掉，不需要在这里逐个删。Room 打开数据库时会执行
+     * `PRAGMA foreign_keys = ON`，级联是生效的。
+     */
+    @Query("DELETE FROM folder")
+    suspend fun clearAll()
 
     /**
      * 只刷新「最后更新」时间。

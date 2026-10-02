@@ -4,7 +4,14 @@ import android.content.Context
 import androidx.room.withTransaction
 import com.plantidentify.data.local.PlantIdentifyDatabase
 import com.plantidentify.data.local.entity.AnalysisStatus
+import com.plantidentify.data.local.entity.FolderEntity
+import com.plantidentify.data.local.entity.FolderImportDataEntity
+import com.plantidentify.data.local.entity.FolderImportItemEntity
+import com.plantidentify.data.local.entity.FolderImportStatus
+import com.plantidentify.data.local.entity.FolderPlantEntity
+import com.plantidentify.data.local.entity.FolderType
 import com.plantidentify.data.local.entity.ImageRole
+import com.plantidentify.data.local.entity.LandscapeFolderDataEntity
 import com.plantidentify.data.local.entity.ObservationImageEntity
 import com.plantidentify.data.local.entity.PlantObservationEntity
 import com.plantidentify.data.local.entity.PlantRecordEntity
@@ -31,6 +38,8 @@ data class BackupManifest(
     val plantCount: Int,
     val observationCount: Int,
     val imageCount: Int,
+    /** 文件夹数。v2 才有这个字段，读 v1 老包时是 0 */
+    val folderCount: Int = 0,
 ) {
     val createdAtText: String
         get() = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(createdAt))
@@ -60,12 +69,14 @@ data class BackupResult(
     val plantCount: Int,
     val observationCount: Int,
     val imageCount: Int,
+    val folderCount: Int,
 )
 
 data class RestoreResult(
     val plantCount: Int,
     val observationCount: Int,
     val imageCount: Int,
+    val folderCount: Int,
     /** 从包里还原出来的图片文件数 */
     val restoredFiles: Int,
     /** 包里缺失、库里却引用着的图片数（不为 0 说明备份包本身不完整） */
@@ -141,6 +152,15 @@ class BackupManager(
             val observations = database.plantObservationDao().getAll()
             val images = database.observationImageDao().getAll()
 
+            // v2：文件夹系统的五张表也要随备份走。
+            // 少备份它们的后果是「植物都在、但文件夹全没了」——
+            // 用户在旧机上整理好的分类，换机后一点不剩。
+            val folders = database.folderDao().getAll()
+            val folderPlants = database.folderPlantDao().getAll()
+            val landscapeData = database.landscapeFolderDataDao().getAll()
+            val importData = database.folderImportDao().getAllData()
+            val importItems = database.folderImportDao().getAllItems()
+
             val dir = backupDir()
             if (!dir.exists()) dir.mkdirs()
 
@@ -162,7 +182,9 @@ class BackupManager(
                             JSONObject()
                                 .put(FIELD_PLANTS, plants.size)
                                 .put(FIELD_OBSERVATIONS, observations.size)
-                                .put(FIELD_IMAGES, images.size),
+                                .put(FIELD_IMAGES, images.size)
+                                .put(FIELD_FOLDERS, folders.size)
+                                .put(FIELD_FOLDER_PLANTS, folderPlants.size),
                         )
                         .toString(2)
                         .toByteArray(Charsets.UTF_8),
@@ -171,7 +193,18 @@ class BackupManager(
 
                 // 2) data.json
                 zip.putNextEntry(ZipEntry(ENTRY_DATA))
-                zip.write(encodeData(plants, observations, images).toByteArray(Charsets.UTF_8))
+                zip.write(
+                    encodeData(
+                        plants = plants,
+                        observations = observations,
+                        images = images,
+                        folders = folders,
+                        folderPlants = folderPlants,
+                        landscapeData = landscapeData,
+                        importData = importData,
+                        importItems = importItems,
+                    ).toByteArray(Charsets.UTF_8),
+                )
                 zip.closeEntry()
 
                 // 3) 图片原文件。用流拷贝而不是 readBytes —— 原图可能上百 MB 总量，
@@ -195,6 +228,7 @@ class BackupManager(
                 plantCount = plants.size,
                 observationCount = observations.size,
                 imageCount = written,
+                folderCount = folders.size,
             )
         }
     }
@@ -246,6 +280,8 @@ class BackupManager(
                     plantCount = counts.optInt(FIELD_PLANTS),
                     observationCount = counts.optInt(FIELD_OBSERVATIONS),
                     imageCount = counts.optInt(FIELD_IMAGES),
+                    // v1 老包没有这个字段 → 0，不是错误
+                    folderCount = counts.optInt(FIELD_FOLDERS),
                 )
             }
         }
@@ -288,6 +324,11 @@ class BackupManager(
 
             // 2) 再整体替换数据库内容
             database.withTransaction {
+                // 文件夹先清 —— 它一删，folder_plant / landscape_folder_data /
+                // folder_import_data / folder_import_item 都会被外键级联带走
+                // （Room 打开库时执行 PRAGMA foreign_keys = ON，级联是生效的）
+                database.folderDao().clearAll()
+
                 database.observationImageDao().clearAll()
                 database.plantObservationDao().clearAll()
                 database.plantRecordDao().clearAll()
@@ -308,6 +349,22 @@ class BackupManager(
                 payload.observations.forEach { database.plantObservationDao().insert(it) }
                 // 图片行整体插入 —— 一次事务一次写入，比逐条快得多
                 if (payload.images.isNotEmpty()) database.observationImageDao().insertAll(payload.images)
+
+                // v2：文件夹系统。**顺序有讲究** —— folder_plant 同时引用
+                // folder 与 plant_record，必须等这两者都插完再插它，
+                // 否则外键约束会直接让整个事务失败。
+                if (payload.folders.isNotEmpty()) database.folderDao().insertAll(payload.folders)
+                if (payload.landscapeData.isNotEmpty()) {
+                    database.landscapeFolderDataDao().insertAll(payload.landscapeData)
+                }
+                if (payload.folderPlants.isNotEmpty()) {
+                    database.folderPlantDao().insertAll(payload.folderPlants)
+                }
+                // 导入元信息通常只有几条（一次导入一条），逐条写就行
+                payload.importData.forEach { database.folderImportDao().upsertData(it) }
+                if (payload.importItems.isNotEmpty()) {
+                    database.folderImportDao().insertItems(payload.importItems)
+                }
             }
 
             // 3) 清理不再被任何记录引用的孤儿文件
@@ -320,6 +377,7 @@ class BackupManager(
                 plantCount = payload.plants.size,
                 observationCount = payload.observations.size,
                 imageCount = payload.images.size,
+                folderCount = payload.folders.size,
                 restoredFiles = restoredFiles,
                 missingFiles = missing,
             )
@@ -361,6 +419,11 @@ class BackupManager(
         plants: List<PlantRecordEntity>,
         observations: List<PlantObservationEntity>,
         images: List<ObservationImageEntity>,
+        folders: List<FolderEntity>,
+        folderPlants: List<FolderPlantEntity>,
+        landscapeData: List<LandscapeFolderDataEntity>,
+        importData: List<FolderImportDataEntity>,
+        importItems: List<FolderImportItemEntity>,
     ): String = JSONObject()
         .put(
             FIELD_PLANTS,
@@ -429,12 +492,107 @@ class BackupManager(
                 }
             },
         )
+        // ---------------- v2：文件夹系统 ----------------
+        //
+        // 这几组**必须带 id 原样存取**：folder_plant 靠 folderId / plantId
+        // 把「哪个文件夹里有哪株植物」串起来，恢复时若重新分配 id，
+        // 关联就会指错对象。PlantRecord 的 id 本来就是照搬的，这里保持一致。
+        .put(
+            FIELD_FOLDERS,
+            JSONArray().apply {
+                folders.forEach { folder ->
+                    put(
+                        JSONObject()
+                            .put(FIELD_ID, folder.id)
+                            .put("name", folder.name)
+                            .put("type", folder.type.name)
+                            .put("description", folder.description)
+                            .put("coverImage", folder.coverImage)
+                            .put("createdAt", folder.createdAt)
+                            .put("updatedAt", folder.updatedAt),
+                    )
+                }
+            },
+        )
+        .put(
+            FIELD_FOLDER_PLANTS,
+            JSONArray().apply {
+                folderPlants.forEach { row ->
+                    put(
+                        JSONObject()
+                            .put("folderId", row.folderId)
+                            .put("plantId", row.plantId)
+                            .put("addedAt", row.addedAt)
+                            .put("sortOrder", row.sortOrder)
+                            .put("source", row.source)
+                            .put("note", row.note),
+                    )
+                }
+            },
+        )
+        .put(
+            FIELD_LANDSCAPE_DATA,
+            JSONArray().apply {
+                landscapeData.forEach { row ->
+                    put(
+                        JSONObject()
+                            .put("folderId", row.folderId)
+                            .put("location", row.location)
+                            .put("landscapeDescription", row.landscapeDescription)
+                            .put("projectType", row.projectType)
+                            .put("analysisResult", row.analysisResult)
+                            .put("analysisModel", row.analysisModel)
+                            .put("analysisUpdatedAt", row.analysisUpdatedAt)
+                            .put("analysisVersion", row.analysisVersion),
+                    )
+                }
+            },
+        )
+        .put(
+            FIELD_IMPORT_DATA,
+            JSONArray().apply {
+                importData.forEach { row ->
+                    put(
+                        JSONObject()
+                            .put("folderId", row.folderId)
+                            .put("sourceName", row.sourceName)
+                            .put("importedAt", row.importedAt)
+                            .put("sourceFileName", row.sourceFileName)
+                            .put("totalCount", row.totalCount)
+                            .put("handledCount", row.handledCount)
+                            .put("rawPackagePath", row.rawPackagePath)
+                            .put("lastMergedAt", row.lastMergedAt),
+                    )
+                }
+            },
+        )
+        .put(
+            FIELD_IMPORT_ITEMS,
+            JSONArray().apply {
+                importItems.forEach { row ->
+                    put(
+                        JSONObject()
+                            .put("folderId", row.folderId)
+                            .put("importPlantId", row.importPlantId)
+                            .put("status", row.status)
+                            .put("matchedPlantId", row.matchedPlantId)
+                            .put("matchLevel", row.matchLevel)
+                            .put("decidedAt", row.decidedAt),
+                    )
+                }
+            },
+        )
         .toString()
 
     private class Payload(
         val plants: List<PlantRecordEntity>,
         val observations: List<PlantObservationEntity>,
         val images: List<ObservationImageEntity>,
+        val folders: List<FolderEntity>,
+        val folderPlants: List<FolderPlantEntity>,
+        val landscapeData: List<LandscapeFolderDataEntity>,
+        val importData: List<FolderImportDataEntity>,
+        val importItems: List<FolderImportItemEntity>,
     )
 
     private fun readPayload(file: File): Payload {
@@ -499,7 +657,84 @@ class BackupManager(
                 )
             }
 
-        return Payload(plants, observations, images)
+        // ---------------- v2：文件夹系统 ----------------
+        // v1 老备份包里没有这几组数组，`orEmpty()` 会给出空列表 ——
+        // 这正是「只加字段不改语义」的兼容做法：老包照样能恢复，只是没有文件夹。
+        val folders = root.optJSONArray(FIELD_FOLDERS).orEmpty().map { node ->
+            FolderEntity(
+                id = node.getLong(FIELD_ID),
+                name = node.optText("name").orEmpty(),
+                // 认不出的类型退回 CUSTOM —— 比让整个恢复失败合理
+                type = node.optEnum("type", FolderType.CUSTOM),
+                description = node.optText("description"),
+                coverImage = node.optText("coverImage"),
+                createdAt = node.optLong("createdAt"),
+                updatedAt = node.optLong("updatedAt"),
+            )
+        }
+
+        val folderPlants = root.optJSONArray(FIELD_FOLDER_PLANTS).orEmpty().map { node ->
+            FolderPlantEntity(
+                folderId = node.getLong("folderId"),
+                plantId = node.getLong("plantId"),
+                addedAt = node.optLong("addedAt"),
+                sortOrder = node.optInt("sortOrder", 0),
+                source = node.optText("source"),
+                note = node.optText("note"),
+            )
+        }
+
+        val landscapeData = root.optJSONArray(FIELD_LANDSCAPE_DATA).orEmpty().map { node ->
+            LandscapeFolderDataEntity(
+                folderId = node.getLong("folderId"),
+                location = node.optText("location"),
+                landscapeDescription = node.optText("landscapeDescription"),
+                projectType = node.optText("projectType"),
+                analysisResult = node.optText("analysisResult"),
+                analysisModel = node.optText("analysisModel"),
+                analysisUpdatedAt = node.optLongOrNull("analysisUpdatedAt"),
+                analysisVersion = node.optIntOrNull("analysisVersion"),
+            )
+        }
+
+        val importData = root.optJSONArray(FIELD_IMPORT_DATA).orEmpty().map { node ->
+            FolderImportDataEntity(
+                folderId = node.getLong("folderId"),
+                sourceName = node.optText("sourceName").orEmpty(),
+                importedAt = node.optLong("importedAt"),
+                sourceFileName = node.optText("sourceFileName"),
+                totalCount = node.optInt("totalCount", 0),
+                handledCount = node.optInt("handledCount", 0),
+                rawPackagePath = node.optText("rawPackagePath"),
+                lastMergedAt = node.optLongOrNull("lastMergedAt"),
+            )
+        }
+
+        val importItems = root.optJSONArray(FIELD_IMPORT_ITEMS).orEmpty().map { node ->
+            FolderImportItemEntity(
+                folderId = node.getLong("folderId"),
+                importPlantId = node.getLong("importPlantId"),
+                // 认不出的状态退回 PENDING：让它重新出现在「待处理」里，
+                // 比默默丢掉一条导入记录好 —— 宁可多问一次
+                status = node.optText("status")
+                    ?.takeIf { name -> FolderImportStatus.entries.any { it.name == name } }
+                    ?: FolderImportStatus.PENDING.name,
+                matchedPlantId = node.optLongOrNull("matchedPlantId"),
+                matchLevel = node.optIntOrNull("matchLevel"),
+                decidedAt = node.optLongOrNull("decidedAt"),
+            )
+        }
+
+        return Payload(
+            plants = plants,
+            observations = observations,
+            images = images,
+            folders = folders,
+            folderPlants = folderPlants,
+            landscapeData = landscapeData,
+            importData = importData,
+            importItems = importItems,
+        )
     }
 
     private companion object {
@@ -511,7 +746,19 @@ class BackupManager(
         const val ENTRY_DATA = "data.json"
 
         const val FORMAT_ID = "plant-identify-backup"
-        const val FORMAT_VERSION = 1
+
+        /**
+         * 备份格式版本。
+         *
+         * - **v1**：只有 plants / observations / images 三张表
+         * - **v2**（v1.0.2 Phase 2）：加入文件夹五张表（folder / folder_plant /
+         *   landscape_folder_data / folder_import_data / folder_import_item）
+         *
+         * `inspect` 校验的是 `version in 1..FORMAT_VERSION`，所以**读 v1 老包
+         * 仍然成功**（缺的数组取空列表即可）；反过来把 v2 包丢给老版本应用才被拒。
+         * 这条「只加不删」的约定就是格式能长期兼容的原因。
+         */
+        const val FORMAT_VERSION = 2
 
         const val FILE_PREFIX = "plantIdentify_Backup"
 
@@ -523,6 +770,14 @@ class BackupManager(
         const val FIELD_PLANTS = "plants"
         const val FIELD_OBSERVATIONS = "observations"
         const val FIELD_IMAGES = "images"
+
+        // ---- v2 新增（v1.0.2 Phase 2 的文件夹系统）----
+        const val FIELD_FOLDERS = "folders"
+        const val FIELD_FOLDER_PLANTS = "folderPlants"
+        const val FIELD_LANDSCAPE_DATA = "landscapeData"
+        const val FIELD_IMPORT_DATA = "importData"
+        const val FIELD_IMPORT_ITEMS = "importItems"
+
         const val FIELD_ID = "id"
     }
 }
@@ -560,6 +815,14 @@ private fun JSONObject.optLongOrNull(key: String): Long? =
 
 private fun JSONObject.optDoubleOrNull(key: String): Double? =
     if (!has(key) || isNull(key)) null else optDouble(key)
+
+/**
+ * 可空 Int。与 `optLongOrNull` 同一个理由 —— `optInt` 对缺失键返回 0，
+ * 而 0 在这里是**合法值**（比如 `analysisVersion` 的第 0 版），
+ * 拿它当「没有值」会让「从未分析过」变成「分析过第 0 版」。
+ */
+private fun JSONObject.optIntOrNull(key: String): Int? =
+    if (has(key) && !isNull(key)) optInt(key) else null
 
 /** 枚举按名字存取，认不出来就退回默认值 */
 private inline fun <reified T : Enum<T>> JSONObject.optEnum(key: String, fallback: T): T {
