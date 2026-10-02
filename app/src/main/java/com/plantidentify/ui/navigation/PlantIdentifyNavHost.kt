@@ -26,8 +26,11 @@ import com.plantidentify.ui.screens.folders.FolderHomeScreen
 import com.plantidentify.ui.screens.folders.FolderHomeViewModel
 import com.plantidentify.ui.screens.folders.FolderPickerScreen
 import com.plantidentify.ui.screens.folders.FolderPickerViewModel
+import com.plantidentify.data.export.FileSharing
 import com.plantidentify.ui.screens.imports.ImportPreviewScreen
 import com.plantidentify.ui.screens.imports.ImportPreviewViewModel
+import com.plantidentify.ui.screens.landscape.LandscapeScreen
+import com.plantidentify.ui.screens.landscape.LandscapeViewModel
 import com.plantidentify.ui.screens.observation.ObservationViewModel
 import com.plantidentify.ui.screens.plants.PlantListViewModel
 import com.plantidentify.ui.screens.addplant.AddPlantScreen
@@ -439,6 +442,9 @@ fun PlantIdentifyNavHost(
                 onOpenImportPreview = { folderId ->
                     navController.navigateSingleTop(Routes.importPreview(folderId))
                 },
+                onOpenLandscape = { folderId, name ->
+                    navController.navigateSingleTop(Routes.landscape(folderId, name))
+                },
             )
         }
 
@@ -514,6 +520,43 @@ fun PlantIdentifyNavHost(
                 viewModel = importPreviewViewModel,
                 onBack = navController::popBackStack,
                 onOpenPlant = { id -> navController.navigateSingleTop(Routes.plantDetail(id)) },
+            )
+        }
+
+        composable(
+            route = Routes.LANDSCAPE,
+            arguments = listOf(
+                navArgument(Routes.KEY_FOLDER_ID) { type = NavType.LongType },
+                navArgument("name") {
+                    type = NavType.StringType
+                    defaultValue = ""
+                },
+            ),
+        ) { backStackEntry ->
+            val folderId = backStackEntry.arguments?.getLong(Routes.KEY_FOLDER_ID) ?: 0L
+            val folderName = backStackEntry.arguments?.getString("name").orEmpty()
+            val landscapeViewModel: LandscapeViewModel = viewModel(
+                key = "landscape-$folderId",
+                factory = LandscapeViewModel.factory(
+                    folderId = folderId,
+                    folderName = folderName,
+                    repository = container.landscapeRepository,
+                    advisor = container.landscapeAiAdvisor,
+                    pdfBuilder = container.pdfReportBuilder,
+                ),
+            )
+            LandscapeScreen(
+                viewModel = landscapeViewModel,
+                imageStore = container.imageStore,
+                onBack = navController::popBackStack,
+                onSharePdf = { path ->
+                    FileSharing.share(
+                        context = navController.context,
+                        file = java.io.File(path),
+                        mimeType = "application/pdf",
+                        subject = "景观分析报告",
+                    )
+                },
             )
         }
 

@@ -1,8 +1,10 @@
 package com.plantidentify.data.export
 
 import com.plantidentify.data.local.entity.FolderEntity
+import com.plantidentify.data.local.entity.LandscapeFolderDataEntity
 import com.plantidentify.data.local.relation.PlantWithObservationsAndImages
 import com.plantidentify.data.location.placeText
+import com.plantidentify.domain.landscape.LandscapeStatistics
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -48,6 +50,47 @@ object PdfReportFactory {
         )
 
     /**
+     * 景观文件夹报告（v1.0.2 Phase 3 §十四）。
+     *
+     * 与普通文件夹报告的差别：**开头是场地信息与统计结论**，
+     * 植物明细排在后面 —— 看景观报告的人先关心「这片绿地怎么样」，
+     * 才会去逐株看植物。统计结论来自 `LandscapeAnalyzer`（本地计算），
+     * AI 分析正文若存在则**原文附上**并保留其免责声明。
+     */
+    fun landscapeReport(
+        folder: FolderEntity,
+        data: LandscapeFolderDataEntity?,
+        stats: LandscapeStatistics,
+        aiAnalysis: String?,
+        items: List<PlantWithObservationsAndImages>,
+    ): PdfReport {
+        val preface = buildString {
+            append("植物档案报告 · 景观分析\n")
+            append(folder.name)
+        }
+        return collectionReport(
+            title = folder.name,
+            subtitle = "景观分析报告",
+            items = items,
+            extraStats = buildList {
+                data?.location?.takeIf { it.isNotBlank() }?.let { add("场地位置" to it) }
+                data?.projectType?.takeIf { it.isNotBlank() }?.let { add("项目类型" to it) }
+                data?.landscapeDescription?.takeIf { it.isNotBlank() }
+                    ?.let { add("场地描述" to it) }
+            },
+            preface = buildList {
+                // 统计结论
+                add("## 植物配置统计")
+                add(stats.toPromptText())
+                if (!aiAnalysis.isNullOrBlank()) {
+                    add("## AI 景观分析")
+                    add(aiAnalysis)
+                }
+            },
+        )
+    }
+
+    /**
      * 某个文件夹的报告。
      *
      * `typeLabel` 由调用方传入、而不是在这里算：文件夹类型的中文标签
@@ -79,6 +122,7 @@ object PdfReportFactory {
         subtitle: String?,
         items: List<PlantWithObservationsAndImages>,
         extraStats: List<Pair<String, String>> = emptyList(),
+        preface: List<String> = emptyList(),
     ): PdfReport {
         val observationCount = items.sumOf { it.observations.size }
         val imageCount = items.sumOf { it.observations.sumOf { o -> o.images.size } }
@@ -91,6 +135,7 @@ object PdfReportFactory {
                 add("照片" to "$imageCount 张")
                 addAll(extraStats)
             },
+            preface = preface,
             plants = items.map { it.toPdfPlant() },
             footerNote = "由 Plant Identify Library 导出 · " +
                 "AI 识别结果为参考意见，不作为专业鉴定依据。",

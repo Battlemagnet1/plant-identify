@@ -5,6 +5,7 @@ import androidx.room.RoomDatabase
 import com.plantidentify.data.local.dao.CleaningIssueDao
 import com.plantidentify.data.local.dao.CleaningStateDao
 import com.plantidentify.data.local.dao.FolderDao
+import com.plantidentify.data.local.dao.FolderImageDao
 import com.plantidentify.data.local.dao.FolderImportDao
 import com.plantidentify.data.local.dao.FolderPlantDao
 import com.plantidentify.data.local.dao.ImageFingerprintDao
@@ -18,6 +19,7 @@ import com.plantidentify.data.local.entity.CleaningIssueEntity
 import com.plantidentify.data.local.entity.CleaningStateEntity
 import com.plantidentify.data.local.entity.FolderEntity
 import com.plantidentify.data.local.entity.FolderImportDataEntity
+import com.plantidentify.data.local.entity.FolderImageEntity
 import com.plantidentify.data.local.entity.FolderImportItemEntity
 import com.plantidentify.data.local.entity.FolderPlantEntity
 import com.plantidentify.data.local.entity.ImageFingerprintEntity
@@ -77,8 +79,9 @@ import com.plantidentify.data.local.entity.RecognitionTaskImageEntity
         LandscapeFolderDataEntity::class,
         FolderImportDataEntity::class,
         FolderImportItemEntity::class,
+        FolderImageEntity::class,
     ],
-    version = 9,
+    version = 10,
     exportSchema = true,
 )
 abstract class PlantIdentifyDatabase : RoomDatabase() {
@@ -145,6 +148,14 @@ abstract class PlantIdentifyDatabase : RoomDatabase() {
      * 不会物理删除任何植物。
      */
     abstract fun folderImportDao(): FolderImportDao
+
+    /**
+     * 景观照片（v10 新增，v1.0.2 Phase 3）。
+     *
+     * 挂在**文件夹**上而不是观察上 —— 与 `observation_image` 是两条互不
+     * 干扰的线（需求 §六 要求明确区分「植物识别图片」与「景观照片」）。
+     */
+    abstract fun folderImageDao(): FolderImageDao
 
     companion object {
         const val NAME = "plant_identify.db"

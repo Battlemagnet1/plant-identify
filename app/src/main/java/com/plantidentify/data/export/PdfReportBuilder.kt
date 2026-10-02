@@ -21,6 +21,16 @@ data class PdfReport(
     val subtitle: String? = null,
     /** 顶部概览的若干「标签 : 值」 */
     val stats: List<Pair<String, String>> = emptyList(),
+
+    /**
+     * 报告的**前置正文**（排在统计概览之后、植物明细之前）。
+     *
+     * 景观报告用：统计结论 + AI 分析原文。普通档案报告为空。
+     * 以 `## ` 开头的行按小节标题渲染，其余按正文段落渲染 ——
+     * 只认这一种标记，因为来源只有统计摘要与 AI 输出，约定一个就够。
+     */
+    val preface: List<String> = emptyList(),
+
     val plants: List<PdfPlant> = emptyList(),
     val footerNote: String? = null,
 )
@@ -98,6 +108,22 @@ class PdfReportBuilder(
                 writer.drawKeyValue(label, value)
             }
             writer.drawDivider()
+        }
+
+        // ---- 前置正文（景观报告的统计结论与 AI 分析）----
+        report.preface.forEach { line ->
+            writer.ensureSpace(24f)
+            if (line.startsWith("## ")) {
+                writer.drawSpacer(4f)
+                writer.drawSectionLabel(line.removePrefix("## ").trim())
+            } else if (line.startsWith("> ")) {
+                // 引用行（AI 报告的免责声明）用脚注样式，视觉上明显弱于正文
+                writer.drawFootnote(line.removePrefix("> ").trim())
+                writer.drawSpacer(2f)
+            } else if (line.isNotBlank()) {
+                writer.drawParagraph(line, writer.paintBody)
+                writer.drawSpacer(2f)
+            }
         }
 
         if (report.plants.isEmpty()) {

@@ -7,6 +7,7 @@ import androidx.room.Query
 import androidx.room.Transaction
 import androidx.room.Update
 import com.plantidentify.data.local.entity.PlantRecordEntity
+import com.plantidentify.data.local.projection.LandscapePlantRow
 import com.plantidentify.data.local.projection.MatchSnapshotRow
 import com.plantidentify.data.local.projection.PlantCardRow
 import com.plantidentify.data.local.relation.PlantWithObservations
@@ -351,4 +352,45 @@ interface PlantRecordDao {
         """,
     )
     suspend fun getMatchSnapshots(): List<MatchSnapshotRow>
+
+    /**
+     * 某个文件夹里的植物，取**景观统计需要的字段**（v1.0.2 Phase 3）。
+     *
+     * 字段比导入匹配多（类型、习性、花期…），但长文本一样截断到 500 字符 ——
+     * 色彩关键词提取只需要开头几句，而一个景观文件夹动辄几百株，
+     * 读全字段是清洗模块栽过的坑。详见 [LandscapePlantRow]。
+     *
+     * 软删的同样排除：回收站里的植物不算在场植物。
+     */
+    @Query(
+        """
+        SELECT p.id, p.name, p.family, p.genus, p.category,
+               SUBSTR(IFNULL(p.growthHabits, ''), 1, 500) AS growthHabits,
+               SUBSTR(IFNULL(p.morphologicalFeatures, ''), 1, 500) AS morphologicalFeatures,
+               p.floweringPeriod, p.fruitingPeriod, p.landscapeUses,
+               SUBSTR(IFNULL(p.description, ''), 1, 500) AS description
+        FROM plant_record p
+        INNER JOIN folder_plant fp ON fp.plantId = p.id
+        WHERE fp.folderId = :folderId AND p.deletedAt IS NULL
+        ORDER BY fp.sortOrder ASC, p.id ASC
+        """,
+    )
+    suspend fun getLandscapePlants(folderId: Long): List<LandscapePlantRow>
+
+    /**
+     * 文件夹成员的完整档案（观察 + 照片），供景观 PDF 的植物明细用
+     * （v1.0.2 Phase 3）。软删的同样排除。
+     */
+    @Transaction
+    @Query(
+        """
+        SELECT p.* FROM plant_record p
+        INNER JOIN folder_plant fp ON fp.plantId = p.id
+        WHERE fp.folderId = :folderId AND p.deletedAt IS NULL
+        ORDER BY fp.sortOrder ASC, p.id ASC
+        """,
+    )
+    suspend fun getFolderPlantsWithObservationsAndImages(
+        folderId: Long,
+    ): List<PlantWithObservationsAndImages>
 }

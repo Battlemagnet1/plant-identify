@@ -13,6 +13,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
@@ -69,6 +70,8 @@ fun FolderDetailScreen(
     onOpenPlant: (Long) -> Unit,
     /** 协作文件夹的「导入检查」入口（v1.0.2 Phase 2） */
     onOpenImportPreview: (Long) -> Unit,
+    /** 景观文件夹的「景观管理」入口（v1.0.2 Phase 3） */
+    onOpenLandscape: (Long, String) -> Unit,
 ) {
     val folder by viewModel.folder.collectAsState()
     val plants by viewModel.plants.collectAsState()
@@ -162,6 +165,17 @@ fun FolderDetailScreen(
                 if (entity.type == FolderType.COLLABORATION) {
                     item(key = "import") {
                         ImportEntryCard(onClick = { onOpenImportPreview(entity.id) })
+                    }
+                }
+
+                // 景观文件夹的「景观管理」入口（v1.0.2 Phase 3）。
+                // 植物成员照常在下面的列表里管理，景观照片与 AI 分析归那页管
+                if (entity.type == FolderType.LANDSCAPE) {
+                    item(key = "landscape") {
+                        Button(
+                            onClick = { onOpenLandscape(entity.id, entity.name) },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text("打开景观管理") }
                     }
                 }
             }

@@ -154,6 +154,14 @@ object Routes {
      */
     const val IMPORT_PREVIEW = "import_preview/{$ARG_FOLDER_ID}"
 
+    /**
+     * 景观文件夹管理页（v1.0.2 Phase 3）。
+     *
+     * `name` 走 query 参数（可选）：标题与 PDF 文件名要用，
+     * 但页面也能自己从数据库查 —— 所以不作为导航身份的一部分。
+     */
+    const val LANDSCAPE = "landscape/{$ARG_FOLDER_ID}?name={name}"
+
     fun folderDetail(folderId: Long): String = "folder/$folderId"
 
     fun folderEdit(folderId: Long): String = "folder_edit/$folderId"
@@ -161,6 +169,9 @@ object Routes {
     fun folderPicker(plantId: Long): String = "folder_picker/$plantId"
 
     fun importPreview(folderId: Long): String = "import_preview/$folderId"
+
+    fun landscape(folderId: Long, name: String): String =
+        "landscape/$folderId?name=${android.net.Uri.encode(name)}"
 
     const val KEY_PLANT_ID = ARG_PLANT_ID
     const val KEY_OBSERVATION_ID = ARG_OBSERVATION_ID

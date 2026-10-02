@@ -430,6 +430,49 @@ object Migrations {
     }
 
     /**
+     * 9 → 10：景观照片（v1.0.2 Phase 3）。
+     *
+     * 纯增量，只加一张表。
+     *
+     * ## 为什么景观照片要单独一张表，而不是复用 `observation_image`
+     *
+     * 需求 §六 特意强调「植物识别图片」与「景观照片」不能混为一谈 ——
+     * 前者拍的是叶片/花/果实（挂在**观察**上，因此属于某株植物），
+     * 后者拍的是整个公园/花坛/道路绿化（挂在**文件夹**上，与植物无关）。
+     *
+     * 硬塞进 `observation_image` 就得让 `observationId` 可空，而
+     * 「每一行图片都一定属于某次观察」正是植物档案里「照片不会丢」
+     * 那条保证 —— 为了省一张表把它破坏掉，代价远大于收益。
+     */
+    val MIGRATION_9_10: Migration = object : Migration(9, 10) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `folder_image` (" +
+                    "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                    "`folderId` INTEGER NOT NULL, " +
+                    "`imagePath` TEXT NOT NULL, " +
+                    "`caption` TEXT, " +
+                    "`kind` TEXT NOT NULL, " +
+                    "`sortOrder` INTEGER NOT NULL, " +
+                    "`addedAt` INTEGER NOT NULL, " +
+                    "FOREIGN KEY(`folderId`) REFERENCES `folder`(`id`) " +
+                    "ON UPDATE NO ACTION ON DELETE CASCADE )",
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_folder_image_folderId` " +
+                    "ON `folder_image` (`folderId`)",
+            )
+            // 景观档案补一列「需要重新分析」。Phase 1 建表时没有这个概念，
+            // 它随 AI 分析一起出现（需求 §十三：植物数据变化后要标记）。
+            // 已有行没有历史可标，默认 0（false）就是正确的。
+            db.execSQL(
+                "ALTER TABLE `landscape_folder_data` ADD COLUMN `needsReanalysis` " +
+                    "INTEGER NOT NULL DEFAULT 0",
+            )
+        }
+    }
+
+    /**
      * 全部迁移，按版本升序。
      *
      * 顺序不能乱 —— Room 会从当前版本开始，逐个往上找能匹配起点的迁移。
@@ -443,5 +486,6 @@ object Migrations {
         MIGRATION_6_7,
         MIGRATION_7_8,
         MIGRATION_8_9,
+        MIGRATION_9_10,
     )
 }

@@ -20,6 +20,7 @@ import com.plantidentify.data.export.ReportThumbnailer
 import com.plantidentify.data.image.ImageCompressor
 import com.plantidentify.data.import.ImportExecutor
 import com.plantidentify.data.import.ImportMergeExecutor
+import com.plantidentify.data.landscape.LandscapeAiAdvisor
 import com.plantidentify.data.local.Migrations
 import com.plantidentify.data.local.PlantIdentifyDatabase
 import com.plantidentify.data.cleaning.AiCleaningAdvisor
@@ -32,6 +33,7 @@ import com.plantidentify.data.recognition.RecognitionQueue
 import com.plantidentify.data.location.LocationProvider
 import com.plantidentify.data.location.LocationSettingsStore
 import com.plantidentify.data.repository.FolderRepository
+import com.plantidentify.data.repository.LandscapeRepository
 import com.plantidentify.data.repository.PlantRepository
 import com.plantidentify.data.storage.ImageStore
 import com.plantidentify.data.stress.StressDataSeeder
@@ -263,6 +265,20 @@ class AppContainer(context: Context) {
      */
     val importMergeExecutor: ImportMergeExecutor by lazy {
         ImportMergeExecutor(database = database, plantRepository = plantRepository)
+    }
+
+    /** 景观文件夹的数据（v1.0.2 Phase 3）：景观照片 + 场地档案 + 本地统计 */
+    val landscapeRepository: LandscapeRepository by lazy {
+        LandscapeRepository(database = database, imageStore = imageStore)
+    }
+
+    /** AI 景观顾问：消费本地统计结论，生成问题分析与改进建议 */
+    val landscapeAiAdvisor: LandscapeAiAdvisor by lazy {
+        LandscapeAiAdvisor(
+            aiSettingsStore = aiSettingsStore,
+            textProvider = textProvider,
+            repository = landscapeRepository,
+        )
     }
 
     /**

@@ -63,4 +63,12 @@ data class LandscapeFolderDataEntity(
      * 光看 `analysisUpdatedAt` 无法区分「分析过之后成员变了」这种情况。
      */
     val analysisVersion: Int? = null,
+
+    /**
+     * 植物成员发生重大变化后置 true，界面据此提示「需要重新分析」。
+     *
+     * 刻意**不自动重跑**：AI 调用要花钱，用户可能只是顺手加了一株植物，
+     * 不该因此自动产生一次付费请求。需求 §十三 要求的也正是「标记」。
+     */
+    val needsReanalysis: Boolean = false,
 )
