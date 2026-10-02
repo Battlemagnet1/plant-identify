@@ -70,7 +70,7 @@ if "--edition" in _argv:
 # 或者更糟：永远通过一个错误的期望值。
 EDITIONS = {
     "base": ("com.plantidentify", "Plant Identify Library", "1.0.0", "1"),
-    "full": ("com.plantidentify.full", "Plant Identify Library（完整版）", "1.0.1", "2"),
+    "full": ("com.plantidentify.full", "Plant Identify Library（完整版）", "1.0.2", "3"),
 }
 if EDITION not in EDITIONS:
     print(f"未知版本 {EDITION}，可选：{', '.join(EDITIONS)}", file=sys.stderr)

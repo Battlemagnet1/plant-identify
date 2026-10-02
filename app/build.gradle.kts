@@ -64,10 +64,10 @@ android {
     //
     // base = 基础版（Phase 1–5 的功能集），applicationId 沿用 com.plantidentify，
     //        已装过 v1.0.0 的用户可以直接覆盖升级。
-    // full = 完整版（含统计/位置/HTML 导出/备份恢复/别名与病虫害/大图查看/照片增删），
+    // full = 完整版（含统计/位置/HTML 导出/备份恢复/别名与病虫害/大图查看/照片增删/文件夹），
     //        独立 applicationId，与基础版**可同时安装**、互不覆盖。
     //
-    // 两者共用同一份底层代码与同一个数据库结构（version 7）与同一套 AI 请求，
+    // 两者共用同一份底层代码与同一个数据库结构（version 8）与同一套 AI 请求，
     // 差异只在界面入口 —— 靠 FULL_EDITION 这个编译期常量控制。
     // 于是两个包的档案数据可以通过备份包互相迁移。
     //
@@ -95,8 +95,8 @@ android {
             buildConfigField("boolean", "FULL_EDITION", "true")
 
             // 本地构建保留已发布的版本号；CI 注入的 versionCode 会跨日递增。
-            versionCode = ciVersionCode ?: 2
-            versionName = ciVersionName ?: "1.0.1"
+            versionCode = ciVersionCode ?: 3
+            versionName = ciVersionName ?: "1.0.2"
         }
     }
 

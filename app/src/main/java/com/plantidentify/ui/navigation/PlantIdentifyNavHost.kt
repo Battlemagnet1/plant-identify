@@ -18,6 +18,14 @@ import com.plantidentify.ui.screens.data.DataManagementScreen
 import com.plantidentify.ui.screens.data.DataManagementViewModel
 import com.plantidentify.ui.screens.edit.PlantEditScreen
 import com.plantidentify.ui.screens.edit.PlantEditViewModel
+import com.plantidentify.ui.screens.folders.FolderDetailScreen
+import com.plantidentify.ui.screens.folders.FolderDetailViewModel
+import com.plantidentify.ui.screens.folders.FolderEditScreen
+import com.plantidentify.ui.screens.folders.FolderEditViewModel
+import com.plantidentify.ui.screens.folders.FolderHomeScreen
+import com.plantidentify.ui.screens.folders.FolderHomeViewModel
+import com.plantidentify.ui.screens.folders.FolderPickerScreen
+import com.plantidentify.ui.screens.folders.FolderPickerViewModel
 import com.plantidentify.ui.screens.observation.ObservationViewModel
 import com.plantidentify.ui.screens.plants.PlantListViewModel
 import com.plantidentify.ui.screens.addplant.AddPlantScreen
@@ -83,6 +91,7 @@ fun PlantIdentifyNavHost(
                 onOpenRecognition = { navController.navigateSingleTop(Routes.RECOGNITION) },
                 onOpenStats = { navController.navigateSingleTop(Routes.STATS) },
                 onOpenTasks = { navController.navigateSingleTop(Routes.TASK_LIST) },
+                onOpenFolders = { navController.navigateSingleTop(Routes.FOLDERS) },
                 imageStore = container.imageStore,
                 viewModel = homeViewModel,
             )
@@ -377,6 +386,105 @@ fun PlantIdentifyNavHost(
             }
         }
 
+        // ---------- 文件夹 / 数据空间（v1.0.2 Phase 1）----------
+        // 入口在首页与植物详情页，两处都仅完整版可见。
+        // 与任务、回收站、清洗一致：**路由本身不做版本判断**，
+        // base 版没有入口所以不可达，数据层两版共用同一套表。
+
+        composable(Routes.FOLDERS) {
+            val folderHomeViewModel: FolderHomeViewModel = viewModel(
+                factory = FolderHomeViewModel.factory(repository = container.folderRepository),
+            )
+            FolderHomeScreen(
+                viewModel = folderHomeViewModel,
+                imageStore = container.imageStore,
+                onBack = navController::popBackStack,
+                onOpenFolder = { folderId ->
+                    navController.navigateSingleTop(Routes.folderDetail(folderId))
+                },
+                onCreateFolder = { navController.navigateSingleTop(Routes.FOLDER_CREATE) },
+            )
+        }
+
+        composable(
+            route = Routes.FOLDER_DETAIL,
+            arguments = listOf(
+                navArgument(Routes.KEY_FOLDER_ID) { type = NavType.LongType },
+            ),
+        ) { backStackEntry ->
+            val folderId = backStackEntry.arguments?.getLong(Routes.KEY_FOLDER_ID) ?: 0L
+            val folderDetailViewModel: FolderDetailViewModel = viewModel(
+                // key 带上 id：同一路由换参数时不会被 ViewModel 复用坑到
+                key = "folder-$folderId",
+                factory = FolderDetailViewModel.factory(
+                    repository = container.folderRepository,
+                    folderId = folderId,
+                ),
+            )
+            FolderDetailScreen(
+                viewModel = folderDetailViewModel,
+                imageStore = container.imageStore,
+                onBack = navController::popBackStack,
+                onEditFolder = { id -> navController.navigateSingleTop(Routes.folderEdit(id)) },
+                onOpenPlant = { plantId ->
+                    navController.navigateSingleTop(Routes.plantDetail(plantId))
+                },
+            )
+        }
+
+        composable(Routes.FOLDER_CREATE) {
+            val folderEditViewModel: FolderEditViewModel = viewModel(
+                factory = FolderEditViewModel.factory(repository = container.folderRepository),
+            )
+            FolderEditScreen(
+                viewModel = folderEditViewModel,
+                onBack = navController::popBackStack,
+                onSaved = navController::popBackStack,
+            )
+        }
+
+        composable(
+            route = Routes.FOLDER_EDIT,
+            arguments = listOf(
+                navArgument(Routes.KEY_FOLDER_ID) { type = NavType.LongType },
+            ),
+        ) { backStackEntry ->
+            val folderId = backStackEntry.arguments?.getLong(Routes.KEY_FOLDER_ID) ?: 0L
+            val folderEditViewModel: FolderEditViewModel = viewModel(
+                key = "folder-edit-$folderId",
+                factory = FolderEditViewModel.factory(
+                    repository = container.folderRepository,
+                    folderId = folderId,
+                ),
+            )
+            FolderEditScreen(
+                viewModel = folderEditViewModel,
+                onBack = navController::popBackStack,
+                onSaved = navController::popBackStack,
+            )
+        }
+
+        composable(
+            route = Routes.FOLDER_PICKER,
+            arguments = listOf(
+                navArgument(Routes.KEY_PLANT_ID) { type = NavType.LongType },
+            ),
+        ) { backStackEntry ->
+            val plantId = backStackEntry.arguments?.getLong(Routes.KEY_PLANT_ID) ?: 0L
+            val folderPickerViewModel: FolderPickerViewModel = viewModel(
+                key = "folder-picker-$plantId",
+                factory = FolderPickerViewModel.factory(
+                    repository = container.folderRepository,
+                    plantId = plantId,
+                ),
+            )
+            FolderPickerScreen(
+                viewModel = folderPickerViewModel,
+                onBack = navController::popBackStack,
+                onSaved = navController::popBackStack,
+            )
+        }
+
         composable(Routes.SETTINGS) {
             val settingsViewModel: SettingsViewModel = viewModel(
                 factory = SettingsViewModel.factory(
@@ -430,6 +538,9 @@ fun PlantIdentifyNavHost(
                     // 而 Routes.OBSERVATION 走的是单条观察 —— 两者参数不同，
                     // 这里复用同一个页面但换用 plantId 参数
                     navController.navigateSingleTop(Routes.plantObservations(id))
+                },
+                onAddToFolder = { id ->
+                    navController.navigateSingleTop(Routes.folderPicker(id))
                 },
                 onDeleted = navController::popBackStack,
             )

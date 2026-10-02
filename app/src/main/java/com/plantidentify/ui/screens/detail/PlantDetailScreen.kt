@@ -93,6 +93,7 @@ fun PlantDetailScreen(
     onBack: () -> Unit,
     onEdit: (Long) -> Unit,
     onOpenObservations: (Long) -> Unit,
+    onAddToFolder: (Long) -> Unit,
     onDeleted: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -246,6 +247,13 @@ fun PlantDetailScreen(
                     observations = detail?.observations.orEmpty(),
                     onOpenObservations = onOpenObservations,
                 )
+            }
+
+            // 文件夹归类（v1.0.2 Phase 1，完整版专属）。
+            // 放在观察摘要之后、免责声明之前 —— 它是「整理这株植物」的动作，
+            // 属于档案内容的末尾，而不是识别结论的一部分
+            if (AppEdition.isFull) {
+                item { FolderMembershipCard(onClick = { onAddToFolder(plant.id) }) }
             }
 
             item { DisclaimerCard() }
@@ -666,6 +674,39 @@ private fun SummaryRow(label: String, value: String) {
 /** 日期格式化：观察记录只看年月日，时分秒对用户没有意义 */
 private fun formatDate(timestamp: Long): String =
     SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date(timestamp))
+
+/**
+ * 「加入文件夹」（v1.0.2 Phase 1，完整版专属）。
+ *
+ * 只给一个入口、**不在详情页列出所属文件夹**：一株植物可能属于十几个文件夹，
+ * 铺开在这里会让页面变长而信息价值有限 —— 点进去既能看全貌也能直接改。
+ */
+@Composable
+private fun FolderMembershipCard(onClick: () -> Unit) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+    ) {
+        Column(modifier = Modifier.padding(20.dp)) {
+            Text(
+                text = "加入文件夹",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Medium,
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = "把这株植物归到项目、调查或场地文件夹里。同一株可以同时属于多个文件夹。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
 
 @Composable
 private fun DisclaimerCard() {

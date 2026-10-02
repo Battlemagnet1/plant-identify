@@ -49,9 +49,8 @@ import com.plantidentify.data.local.entity.RecognitionTaskStatus
 import com.plantidentify.data.local.projection.TaskCardRow
 import com.plantidentify.data.storage.ImageStore
 import com.plantidentify.ui.components.LocalImage
-import java.text.SimpleDateFormat
+import com.plantidentify.ui.components.rememberDateFormatter
 import java.util.Date
-import java.util.Locale
 
 /**
  * 识别任务列表（Phase 8，完整版专属入口）。
@@ -253,6 +252,9 @@ private fun TaskCard(
     onSplitNew: () -> Unit,
     onOpenPlant: () -> Unit,
 ) {
+    // composable 内不能用 Locale.getDefault()（lint NonObservableLocale 判 error）
+    val dateFormat = rememberDateFormatter("M月d日 HH:mm")
+
     Card(
         modifier = Modifier.fillMaxWidth(),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
@@ -277,8 +279,7 @@ private fun TaskCard(
                     )
                     Text(
                         text = "${task.imageCount} 张照片 · " +
-                            SimpleDateFormat("M月d日 HH:mm", Locale.getDefault())
-                                .format(Date(task.createdAt)),
+                            dateFormat.format(Date(task.createdAt)),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

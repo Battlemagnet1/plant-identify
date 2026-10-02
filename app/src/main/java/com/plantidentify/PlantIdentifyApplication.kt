@@ -28,6 +28,7 @@ import com.plantidentify.data.recognition.RecognitionExecutor
 import com.plantidentify.data.recognition.RecognitionQueue
 import com.plantidentify.data.location.LocationProvider
 import com.plantidentify.data.location.LocationSettingsStore
+import com.plantidentify.data.repository.FolderRepository
 import com.plantidentify.data.repository.PlantRepository
 import com.plantidentify.data.storage.ImageStore
 import com.plantidentify.data.stress.StressDataSeeder
@@ -206,6 +207,21 @@ class AppContainer(context: Context) {
             // 删除档案时要显式删图片文件 —— Room 级联只管数据库行
             imageStore = imageStore,
         )
+    }
+
+    /**
+     * 文件夹仓库（v1.0.2 Phase 1）。
+     *
+     * 单独一个仓库而不是并进 [plantRepository]：后者的职责是「植物档案的
+     * 生命周期」已经 1000 行出头，而文件夹是另一个聚合。更重要的是
+     * **「删文件夹不删植物」这条约束在这里成为结构性保证** ——
+     * `FolderRepository` 的代码根本不持有写 `plant_record` 的入口。
+     *
+     * 只依赖数据库本体：文件夹的操作全在三张新表内完成，
+     * 不碰图片文件、不碰 AI（景观照片与分析是 Phase 3 的事）。
+     */
+    val folderRepository: FolderRepository by lazy {
+        FolderRepository(database = database)
     }
 
     /**

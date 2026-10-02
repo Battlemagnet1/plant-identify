@@ -34,9 +34,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.plantidentify.data.local.entity.PlantRecordEntity
-import java.text.SimpleDateFormat
+import com.plantidentify.ui.components.rememberDateFormatter
 import java.util.Date
-import java.util.Locale
 
 /**
  * 回收站（Phase 3，完整版专属入口）。
@@ -178,6 +177,9 @@ private fun TrashCard(
     onRestore: () -> Unit,
     onPurge: () -> Unit,
 ) {
+    // composable 内不能用 Locale.getDefault()（lint NonObservableLocale 判 error）
+    val dateFormat = rememberDateFormatter("M月d日 HH:mm")
+
     Card(
         modifier = Modifier.fillMaxWidth(),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
@@ -195,8 +197,7 @@ private fun TrashCard(
                 )
             }
             Text(
-                text = "删除于 " + SimpleDateFormat("M月d日 HH:mm", Locale.getDefault())
-                    .format(Date(plant.deletedAt ?: 0L)),
+                text = "删除于 " + dateFormat.format(Date(plant.deletedAt ?: 0L)),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

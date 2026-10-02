@@ -4,6 +4,8 @@ import androidx.room.Database
 import androidx.room.RoomDatabase
 import com.plantidentify.data.local.dao.CleaningIssueDao
 import com.plantidentify.data.local.dao.CleaningStateDao
+import com.plantidentify.data.local.dao.FolderDao
+import com.plantidentify.data.local.dao.FolderPlantDao
 import com.plantidentify.data.local.dao.ImageFingerprintDao
 import com.plantidentify.data.local.dao.ObservationImageDao
 import com.plantidentify.data.local.dao.PlantObservationDao
@@ -12,7 +14,10 @@ import com.plantidentify.data.local.dao.RecognitionTaskDao
 import com.plantidentify.data.local.dao.RecognitionTaskImageDao
 import com.plantidentify.data.local.entity.CleaningIssueEntity
 import com.plantidentify.data.local.entity.CleaningStateEntity
+import com.plantidentify.data.local.entity.FolderEntity
+import com.plantidentify.data.local.entity.FolderPlantEntity
 import com.plantidentify.data.local.entity.ImageFingerprintEntity
+import com.plantidentify.data.local.entity.LandscapeFolderDataEntity
 import com.plantidentify.data.local.entity.ObservationImageEntity
 import com.plantidentify.data.local.entity.PlantObservationEntity
 import com.plantidentify.data.local.entity.PlantRecordEntity
@@ -29,6 +34,16 @@ import com.plantidentify.data.local.entity.RecognitionTaskImageEntity
  *   └── plant_observation（一次观察一条）
  *         └── observation_image（一张照片一条）
  * ```
+ *
+ * 文件夹系统（v8，v1.0.2 Phase 1）在这三条之外**并列**长出两条边：
+ *
+ * ```
+ * plant_record ──N:M── folder_plant ──N── folder
+ *                                            └── landscape_folder_data（1:1 扩展）
+ * ```
+ *
+ * 关键区别：**folder 与 plant_record 之间只有「关联」，没有「归属」** ——
+ * 删文件夹不会影响任何植物档案（没有任何从 folder 指向 plant_record 的外键）。
  *
  * 迁移策略（重要）：
  *   - [exportSchema] 必须为 true，schema JSON 提交到版本库做版本追溯
@@ -48,8 +63,11 @@ import com.plantidentify.data.local.entity.RecognitionTaskImageEntity
         CleaningIssueEntity::class,
         ImageFingerprintEntity::class,
         CleaningStateEntity::class,
+        FolderEntity::class,
+        FolderPlantEntity::class,
+        LandscapeFolderDataEntity::class,
     ],
-    version = 7,
+    version = 8,
     exportSchema = true,
 )
 abstract class PlantIdentifyDatabase : RoomDatabase() {
@@ -82,6 +100,23 @@ abstract class PlantIdentifyDatabase : RoomDatabase() {
 
     /** 扫描游标（v5）。单行表，记住「上次扫到什么时候」 */
     abstract fun cleaningStateDao(): CleaningStateDao
+
+    /**
+     * 文件夹与它的关联表（v8 新增，v1.0.2 Phase 1）。
+     *
+     * [FolderEntity] 是**通用容器**（景观 / 协作 / 自定义三种类型共用），
+     * [FolderPlantEntity] 是它与植物档案的**多对多**关联 ——
+     * 一株植物可以同时属于多个文件夹，而库里始终只有一条 PlantRecord。
+     *
+     * 注意 [FolderPlantDao] 里没有任何语句会写 `plant_record`：
+     * 「删文件夹不删植物」在 DAO 这一层就是结构性保证。
+     *
+     * 景观扩展表 [LandscapeFolderDataEntity] **刻意没有 DAO** ——
+     * 本阶段只把结构建好，读写它的代码属于 Phase 3。
+     */
+    abstract fun folderDao(): FolderDao
+
+    abstract fun folderPlantDao(): FolderPlantDao
 
     companion object {
         const val NAME = "plant_identify.db"

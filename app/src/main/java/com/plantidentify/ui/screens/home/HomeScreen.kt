@@ -56,6 +56,7 @@ fun HomeScreen(
     onOpenRecognition: () -> Unit,
     onOpenStats: () -> Unit,
     onOpenTasks: () -> Unit,
+    onOpenFolders: () -> Unit,
     imageStore: ImageStore,
     viewModel: HomeViewModel,
     modifier: Modifier = Modifier,
@@ -125,6 +126,11 @@ fun HomeScreen(
                 // 偏后 —— 批量识别是进阶动作，不让它挤占「拍一拍」的主路径
                 item(key = "tasks", contentType = "entry") {
                     TasksEntry(onClick = onOpenTasks)
+                }
+                // 文件夹入口（v1.0.2 Phase 1，完整版专属）。放在任务卡之后 ——
+                // 它是「整理已经识别过的植物」，属于识别之后的动作
+                item(key = "folders", contentType = "entry") {
+                    FoldersEntry(onClick = onOpenFolders)
                 }
             }
 
@@ -382,6 +388,40 @@ private fun TasksEntry(onClick: () -> Unit) {
             Spacer(Modifier.height(6.dp))
             Text(
                 text = "把一批照片丢进队列，应用在后台逐个识别，结果自动写入档案 —— 不用停在页面里等。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/**
+ * 「文件夹」入口卡（v1.0.2 Phase 1，完整版专属）。
+ *
+ * 一句话讲清它解决什么：**一株植物可以同时属于多个文件夹，而档案只有一份**。
+ * 这是「按项目 / 场地 / 课程整理」与「按物种存档」这两种需求的区别 ——
+ * 后者已经由植物档案本身承担了。
+ */
+@Composable
+private fun FoldersEntry(onClick: () -> Unit) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+    ) {
+        Column(modifier = Modifier.padding(20.dp)) {
+            Text(
+                text = "文件夹",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Medium,
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = "把植物归到不同的项目、调查或场地里。同一株植物可以出现在多个文件夹中，档案只会保存一份。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

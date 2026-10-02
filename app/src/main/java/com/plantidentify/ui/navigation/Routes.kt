@@ -111,7 +111,47 @@ object Routes {
 
     fun mergePreview(issueId: Long): String = "merge_preview/$issueId"
 
+    // ------------------------------------------------------------------
+    // 文件夹 / 数据空间（v1.0.2 Phase 1，完整版专属入口）
+    // ------------------------------------------------------------------
+
+    private const val ARG_FOLDER_ID = "folderId"
+
+    /**
+     * 文件夹主页：全部 / 按类型筛选、新建、搜索、排序。
+     *
+     * 与其他完整版入口（任务、回收站、清洗）一样，**路由本身不做版本判断** ——
+     * base 版没有入口所以不可达，而数据层两版完全一致（备份包可互迁）。
+     */
+    const val FOLDERS = "folders"
+
+    /** 文件夹详情：信息 + 植物列表 + 批量整理 */
+    const val FOLDER_DETAIL = "folder/{$ARG_FOLDER_ID}"
+
+    /** 新建文件夹 */
+    const val FOLDER_CREATE = "folder_create"
+
+    /** 编辑文件夹（改名 / 改类型 / 改描述） */
+    const val FOLDER_EDIT = "folder_edit/{$ARG_FOLDER_ID}"
+
+    /**
+     * 「加入文件夹」选择页（从植物详情进入）。
+     *
+     * 单独一页而不是就地弹对话框：一株植物可能属于十几个文件夹，
+     * 对话框里滚动勾选会让人看不清自己选了什么，而且这个操作
+     * 会**整体替换**归属关系（见 `FolderRepository.setPlantFolders`），
+     * 值得用一个有「保存 / 取消」语义的页面来做。
+     */
+    const val FOLDER_PICKER = "folder_picker/{$ARG_PLANT_ID}"
+
+    fun folderDetail(folderId: Long): String = "folder/$folderId"
+
+    fun folderEdit(folderId: Long): String = "folder_edit/$folderId"
+
+    fun folderPicker(plantId: Long): String = "folder_picker/$plantId"
+
     const val KEY_PLANT_ID = ARG_PLANT_ID
     const val KEY_OBSERVATION_ID = ARG_OBSERVATION_ID
     const val KEY_ISSUE_ID = ARG_ISSUE_ID
+    const val KEY_FOLDER_ID = ARG_FOLDER_ID
 }

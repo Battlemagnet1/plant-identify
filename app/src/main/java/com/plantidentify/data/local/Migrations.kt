@@ -266,6 +266,108 @@ object Migrations {
     }
 
     /**
+     * v7 → v8：文件夹 / 数据空间系统（v1.0.2 Phase 1）。
+     *
+     * 纯增量：三张新表，**不动任何既有表、不加列**。老用户升级后
+     * 植物档案、观察、照片、任务、清洗状态全部原样可用，只是多出三个空表 ——
+     * 与 [MIGRATION_2_3] 同为迁移里风险最低的一类。
+     *
+     * ## 三张表各自的定位
+     *
+     * | 表 | 性质 | 丢了会怎样 |
+     * |---|---|---|
+     * | `folder` | 用户创建的容器 | 用户整理好的归类全没了（但不影响植物本身） |
+     * | `folder_plant` | 关联 | 「哪株植物在哪个文件夹里」丢失 |
+     * | `landscape_folder_data` | 景观扩展 | 本阶段为空表（Phase 3 才写入） |
+     *
+     * ## 「删文件夹不删植物」写在外键方向上
+     *
+     * ```
+     * folder_plant.folderId → folder.id        ON DELETE CASCADE  ← 删文件夹只级联删关联行
+     * folder_plant.plantId  → plant_record.id  ON DELETE CASCADE  ← 删植物只删关联行
+     * ```
+     *
+     * **没有任何从 folder 指向 plant_record 的外键** —— 所以「删掉一个文件夹，
+     * 里面的植物也跟着没了」这种事故在 SQL 层就无法发生，不依赖上层代码自觉。
+     *
+     * ## 列顺序与 NOT NULL 必须和 Room 生成的建表语句逐字一致
+     *
+     * 下面的 SQL 是手写的，Room 不会替我们校验。它比对的是
+     * **「列名集合 + 亲和性 + 非空 + 主键位置 + 索引 + 外键与级联动作」**，
+     * 任何一处不符都会在**用户设备上**抛 `Migration didn't properly handle`
+     * （构建期发现不了）。
+     *
+     * 写完必须做两件事：拿构建产物 `schemas/8.json` 与这里的 SQL 逐条核对
+     * （`tools/verify_migration_schema.py` 会自动做这件事），
+     * 以及在**有旧数据的设备上**覆盖安装实测一次。
+     *
+     * 复合主键的列顺序也要与实体一致：`FolderPlantEntity.primaryKeys` 是
+     * `["folderId", "plantId"]`，所以这里的 `PRIMARY KEY(folderId, plantId)`
+     * 不能颠倒。
+     */
+    val MIGRATION_7_8: Migration = object : Migration(7, 8) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            // ① 文件夹主表
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `folder` (" +
+                    "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                    "`name` TEXT NOT NULL, " +
+                    "`type` TEXT NOT NULL, " +
+                    "`description` TEXT, " +
+                    "`coverImage` TEXT, " +
+                    "`createdAt` INTEGER NOT NULL, " +
+                    "`updatedAt` INTEGER NOT NULL)",
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_folder_type` ON `folder` (`type`)",
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_folder_updatedAt` ON `folder` (`updatedAt`)",
+            )
+
+            // ② 多对多关联表。两个外键的删除语义见上方 KDoc
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `folder_plant` (" +
+                    "`folderId` INTEGER NOT NULL, " +
+                    "`plantId` INTEGER NOT NULL, " +
+                    "`addedAt` INTEGER NOT NULL, " +
+                    "`sortOrder` INTEGER NOT NULL, " +
+                    "`source` TEXT, " +
+                    "`note` TEXT, " +
+                    "PRIMARY KEY(`folderId`, `plantId`), " +
+                    "FOREIGN KEY(`folderId`) REFERENCES `folder`(`id`) " +
+                    "ON UPDATE NO ACTION ON DELETE CASCADE , " +
+                    "FOREIGN KEY(`plantId`) REFERENCES `plant_record`(`id`) " +
+                    "ON UPDATE NO ACTION ON DELETE CASCADE )",
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_folder_plant_plantId` " +
+                    "ON `folder_plant` (`plantId`)",
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_folder_plant_folderId_sortOrder` " +
+                    "ON `folder_plant` (`folderId`, `sortOrder`)",
+            )
+
+            // ③ 景观扩展（1:1）。本阶段无 DAO、无写入方，Phase 3 才会读它
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `landscape_folder_data` (" +
+                    "`folderId` INTEGER NOT NULL, " +
+                    "`location` TEXT, " +
+                    "`landscapeDescription` TEXT, " +
+                    "`projectType` TEXT, " +
+                    "`analysisResult` TEXT, " +
+                    "`analysisModel` TEXT, " +
+                    "`analysisUpdatedAt` INTEGER, " +
+                    "`analysisVersion` INTEGER, " +
+                    "PRIMARY KEY(`folderId`), " +
+                    "FOREIGN KEY(`folderId`) REFERENCES `folder`(`id`) " +
+                    "ON UPDATE NO ACTION ON DELETE CASCADE )",
+            )
+        }
+    }
+
+    /**
      * 全部迁移，按版本升序。
      *
      * 顺序不能乱 —— Room 会从当前版本开始，逐个往上找能匹配起点的迁移。
@@ -277,5 +379,6 @@ object Migrations {
         MIGRATION_4_5,
         MIGRATION_5_6,
         MIGRATION_6_7,
+        MIGRATION_7_8,
     )
 }
