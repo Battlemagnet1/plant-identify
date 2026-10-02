@@ -32,6 +32,7 @@ import com.plantidentify.data.recognition.RecognitionExecutor
 import com.plantidentify.data.recognition.RecognitionQueue
 import com.plantidentify.data.location.LocationProvider
 import com.plantidentify.data.location.LocationSettingsStore
+import com.plantidentify.data.plantnet.PlantNetProvider
 import com.plantidentify.data.repository.FolderRepository
 import com.plantidentify.data.repository.LandscapeRepository
 import com.plantidentify.data.repository.PlantRepository
@@ -307,6 +308,7 @@ class AppContainer(context: Context) {
         RecognitionExecutor(
             aiSettingsStore = aiSettingsStore,
             visionProvider = visionProvider,
+            plantNetProvider = PlantNetProvider(),
             imageCompressor = imageCompressor,
             imageStore = imageStore,
             repository = plantRepository,

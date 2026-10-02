@@ -44,6 +44,7 @@ class AiSettingsStore(
     private val jsonKey = stringPreferencesKey(KEY_JSON)
     private val visionSecretKey = stringPreferencesKey(KEY_VISION_SECRET)
     private val textSecretKey = stringPreferencesKey(KEY_TEXT_SECRET)
+    private val plantNetSecretKey = stringPreferencesKey(KEY_PLANTNET_SECRET)
 
     /** 当前配置（API Key 已解密回填） */
     val config: Flow<AiConfig> = appContext.aiConfigDataStore.data
@@ -75,6 +76,14 @@ class AiSettingsStore(
             }
         }
 
+        val plantNetSecret = config.plantNet?.let { pn ->
+            cipher.encrypt(pn.apiKey).also { secret ->
+                if (pn.apiKey.isNotEmpty() && secret == null) {
+                    return Result.failure(IllegalStateException(ENCRYPT_FAILED))
+                }
+            }
+        }
+
         return runCatching {
             appContext.aiConfigDataStore.edit { prefs ->
                 prefs[jsonKey] = encodeJson(config)
@@ -89,6 +98,12 @@ class AiSettingsStore(
                     prefs.remove(textSecretKey)
                 } else {
                     prefs[textSecretKey] = textSecret
+                }
+
+                if (config.plantNet == null || plantNetSecret.isNullOrEmpty()) {
+                    prefs.remove(plantNetSecretKey)
+                } else {
+                    prefs[plantNetSecretKey] = plantNetSecret
                 }
             }
             Unit
@@ -126,6 +141,8 @@ class AiSettingsStore(
         put(FIELD_VISION, encodeEndpoint(config.vision))
         put(FIELD_STRATEGY, config.promptStrategy.name)
         config.text?.let { put(FIELD_TEXT, encodeEndpoint(it)) }
+        config.plantNet?.let { put(FIELD_PLANTNET, encodeEndpoint(it)) }
+        put(FIELD_CHANNEL, config.recognitionChannel.name)
     }.toString()
 
     private fun encodeEndpoint(endpoint: AiEndpointConfig): JSONObject = JSONObject()
@@ -148,10 +165,17 @@ class AiSettingsStore(
             val vision = decodeEndpoint(root.optJSONObject(FIELD_VISION))
                 ?: AiConfig.defaultVision()
             val text = decodeEndpoint(root.optJSONObject(FIELD_TEXT))
+            val plantNet = decodeEndpoint(root.optJSONObject(FIELD_PLANTNET))
 
             AiConfig(
                 vision = vision.copy(apiKey = cipher.decrypt(prefs[visionSecretKey]).orEmpty()),
                 text = text?.copy(apiKey = cipher.decrypt(prefs[textSecretKey]).orEmpty()),
+                plantNet = plantNet?.copy(
+                    apiKey = cipher.decrypt(prefs[plantNetSecretKey]).orEmpty(),
+                ),
+                recognitionChannel = RecognitionChannel.fromName(
+                    root.optString(FIELD_CHANNEL).takeIf { it.isNotBlank() },
+                ),
                 promptStrategy = PromptStrategy.fromName(
                     root.optString(FIELD_STRATEGY).takeIf { it.isNotBlank() },
                 ),
@@ -178,10 +202,13 @@ class AiSettingsStore(
         const val KEY_JSON = "ai_config_json"
         const val KEY_VISION_SECRET = "vision_api_key_cipher"
         const val KEY_TEXT_SECRET = "text_api_key_cipher"
+        const val KEY_PLANTNET_SECRET = "plantnet_api_key_cipher"
 
         const val FIELD_VISION = "vision"
         const val FIELD_STRATEGY = "promptStrategy"
         const val FIELD_TEXT = "text"
+        const val FIELD_PLANTNET = "plantnet"
+        const val FIELD_CHANNEL = "recognitionChannel"
         const val FIELD_PRESET = "preset"
         const val FIELD_BASE_URL = "baseUrl"
         const val FIELD_MODEL = "model"

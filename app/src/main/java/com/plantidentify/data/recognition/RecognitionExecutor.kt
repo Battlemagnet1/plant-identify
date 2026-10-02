@@ -1,8 +1,10 @@
 package com.plantidentify.data.recognition
 
 import androidx.work.ListenableWorker
+import com.plantidentify.data.ai.AiConfig
 import com.plantidentify.data.ai.AiFailure
 import com.plantidentify.data.ai.AiSettingsStore
+import com.plantidentify.data.ai.RecognitionChannel
 import com.plantidentify.data.ai.RecognitionResult
 import com.plantidentify.data.ai.VisionCallResult
 import com.plantidentify.data.ai.VisionImage
@@ -46,6 +48,8 @@ import com.plantidentify.domain.model.TimingTrace
 class RecognitionExecutor(
     private val aiSettingsStore: AiSettingsStore,
     private val visionProvider: VisionProvider,
+    /** Pl@ntNet 通道（v1.0.2 Phase 3 §十六）。选了 PLANT_NET / AUTO 才会用到 */
+    private val plantNetProvider: VisionProvider,
     private val imageCompressor: ImageCompressor,
     private val imageStore: ImageStore,
     private val repository: PlantRepository,
@@ -146,6 +150,80 @@ class RecognitionExecutor(
 
         val place = placeHintFor(draft)
 
+        // 通道路由（v1.0.2 Phase 3 §十六）。
+        // PLANT_NET 模式下刻意**不调**视觉 AI —— 白花一次钱
+        return when (config.recognitionChannel) {
+            RecognitionChannel.PLANT_NET -> {
+                val pn = config.plantNet
+                if (pn == null || !pn.isUsable) {
+                    return RecognizeOutcome.Failed(
+                        AiFailure.LocalProblem(
+                            "还没有配置 Pl@ntNet 的 API Key",
+                            "到「设置」页填入，或把识别通道切回 AI 视觉识别",
+                        ),
+                    )
+                }
+                val result = plantNetProvider.recognize(
+                    VisionRequest(images = images, config = pn),
+                )
+                trace.mark("Pl@ntNet 识别")
+                outcomeOf(result, trace, place, images, images.size < draft.count)
+            }
+
+            RecognitionChannel.AUTO ->
+                recognizeWithAutoSource(config, images, place, trace, images.size < draft.count)
+
+            RecognitionChannel.VISION_AI -> {
+                val vision = visionProvider.recognize(
+                    VisionRequest(
+                        images = images,
+                        config = config.vision,
+                        strategy = config.promptStrategy,
+                        place = place,
+                    ),
+                )
+                trace.mark("识别请求")
+                outcomeOf(vision, trace, place, images, images.size < draft.count)
+            }
+        }
+    }
+
+    /** 把 Provider 调用结果收敛成识别结局 */
+    private fun outcomeOf(
+        result: VisionCallResult,
+        trace: TimingTrace,
+        place: String?,
+        images: List<VisionImage>,
+        partial: Boolean,
+    ): RecognizeOutcome = when (result) {
+        is VisionCallResult.Success -> RecognizeOutcome.Recognized(
+            response = result.response,
+            timing = trace.segments(),
+            placeHint = place,
+            imageCount = images.size,
+            usedFallbackForSomeImages = partial,
+        )
+
+        is VisionCallResult.Failure -> RecognizeOutcome.Failed(result.failure)
+    }
+
+    /**
+     * 自动模式（§十六）：视觉 AI 为主源、Pl@ntNet 为副源做一致性比对。
+     *
+     * ## 不一致时怎么办
+     *
+     * **不改主结论、也不动 confidence** —— 两个源的置信度语义不同
+     * （语言模型自估 vs 分类器后验），比大小或平均都是无意义数字，
+     * 需求特意点了这条。这里只把双方结论摆进 conflicts，交给人工确认；
+     * Pl@ntNet 的头名候选追加进 alternatives，让用户可以直接选它。
+     */
+    private suspend fun recognizeWithAutoSource(
+        config: AiConfig,
+        images: List<VisionImage>,
+        place: String?,
+        trace: TimingTrace,
+        partial: Boolean,
+    ): RecognizeOutcome {
         val vision = visionProvider.recognize(
             VisionRequest(
                 images = images,
@@ -154,19 +232,114 @@ class RecognitionExecutor(
                 place = place,
             ),
         )
-        trace.mark("识别请求")
+        trace.mark("视觉 AI 识别")
 
-        return when (vision) {
-            is VisionCallResult.Success -> RecognizeOutcome.Recognized(
-                response = vision.response,
+        // 主源失败而 Pl@ntNet 可用 → 用 Pl@ntNet 兜底，而不是直接失败
+        val primaryResponse: VisionResponse = when (vision) {
+            is VisionCallResult.Success -> vision.response
+            is VisionCallResult.Failure -> {
+                val pn = config.plantNet
+                if (pn == null || !pn.isUsable) return RecognizeOutcome.Failed(vision.failure)
+
+                val fallback = plantNetProvider.recognize(
+                    VisionRequest(images = images, config = pn),
+                )
+                trace.mark("Pl@ntNet 兜底")
+                return when (fallback) {
+                    is VisionCallResult.Success -> RecognizeOutcome.Recognized(
+                        response = fallback.response.let { resp ->
+                            val r = resp.result
+                            // result 可空（解析失败也有 rawText）——只在不为空时追加说明
+                            if (r == null) {
+                                resp
+                            } else {
+                                resp.copy(
+                                    result = r.copy(
+                                        conflicts = r.conflicts +
+                                            "视觉 AI 不可用，本条结果来自 Pl@ntNet",
+                                    ),
+                                )
+                            }
+                        },
+                        timing = trace.segments(),
+                        placeHint = place,
+                        imageCount = images.size,
+                        usedFallbackForSomeImages = partial,
+                    )
+
+                    is VisionCallResult.Failure -> RecognizeOutcome.Failed(vision.failure)
+                }
+            }
+        }
+
+        val primary = primaryResponse.result
+        if (primary == null) {
+            // 主源连结构化结果都没有（完全解析失败），没有可比对的东西
+            return RecognizeOutcome.Recognized(
+                response = primaryResponse,
                 timing = trace.segments(),
                 placeHint = place,
                 imageCount = images.size,
-                usedFallbackForSomeImages = images.size < draft.count,
+                usedFallbackForSomeImages = partial,
             )
-
-            is VisionCallResult.Failure -> RecognizeOutcome.Failed(vision.failure)
         }
+
+        val pnConfig = config.plantNet
+        if (pnConfig == null || !pnConfig.isUsable) {
+            // 未配置副源：自动模式不强制要求配它，安静降级为主源
+            return RecognizeOutcome.Recognized(
+                response = primaryResponse,
+                timing = trace.segments(),
+                placeHint = place,
+                imageCount = images.size,
+                usedFallbackForSomeImages = partial,
+            )
+        }
+
+        val pn = plantNetProvider.recognize(VisionRequest(images = images, config = pnConfig))
+        trace.mark("Pl@ntNet 比对")
+
+        val conflicts = primary.conflicts.toMutableList()
+        val alternatives = primary.alternatives.toMutableList()
+        val pnResult = (pn as? VisionCallResult.Success)?.response?.result
+        if (pnResult != null) {
+            if (sameSpecies(primary, pnResult)) {
+                conflicts += "Pl@ntNet 与视觉 AI 结论一致（${pnResult.name}）"
+            } else {
+                conflicts += "两源结论不一致：视觉 AI 认为「${primary.name}」，" +
+                    "Pl@ntNet 认为「${pnResult.name}」——请人工核对后确认"
+                alternatives += RecognitionResult.Alternative(
+                    name = pnResult.name,
+                    confidence = pnResult.confidence,
+                )
+            }
+        } else {
+            val reason = (pn as? VisionCallResult.Failure)?.failure?.userMessage
+            conflicts += "Pl@ntNet 比对未完成${reason?.let { "（$it）" }.orEmpty()}"
+        }
+
+        return RecognizeOutcome.Recognized(
+            response = primaryResponse.copy(
+                result = primary.copy(
+                    conflicts = conflicts,
+                    alternatives = alternatives,
+                ),
+            ),
+            timing = trace.segments(),
+            placeHint = place,
+            imageCount = images.size,
+            usedFallbackForSomeImages = partial,
+        )
+    }
+
+    /** 两个源是否给出同一个物种：拉丁名优先（最稳），退化到中文名 */
+    private fun sameSpecies(a: RecognitionResult, b: RecognitionResult): Boolean {
+        val latinA = a.latinName?.trim()?.lowercase().orEmpty()
+        val latinB = b.latinName?.trim()?.lowercase().orEmpty()
+        if (latinA.isNotEmpty() && latinB.isNotEmpty()) return latinA == latinB
+        val nameA = a.name.trim()
+        val nameB = b.name.trim()
+        return nameA.isNotEmpty() && nameA == nameB
     }
 
     /**
@@ -296,6 +469,9 @@ class RecognitionExecutor(
      * - **不共用**：照片来源（任务表 vs 草稿）与归并策略
      *   （后台自动挂靠 vs 界面弹框）—— 这两点本来就是两个场景的差异，
      *   硬抽到一起反而要塞一堆 if。
+     * - **后台任务固定走视觉 AI**，不跟随识别通道设置：
+     *   Pl@ntNet 免费版每天只有几十次配额，批量任务一跑就超限，
+     *   让队列里的任务接连失败比「不用 Pl@ntNet」糟得多。
      *
      * @param attempt WorkManager 的 `runAttemptCount`，用于重试上限判断与回写展示
      */

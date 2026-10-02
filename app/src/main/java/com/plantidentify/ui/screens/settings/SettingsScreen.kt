@@ -23,6 +23,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarHost
@@ -54,7 +55,9 @@ import com.plantidentify.R
 import com.plantidentify.data.ai.AiEndpointConfig
 import com.plantidentify.data.ai.AiPreset
 import com.plantidentify.data.ai.PromptStrategy
+import com.plantidentify.data.ai.RecognitionChannel
 import com.plantidentify.ui.components.BackIconButton
+import com.plantidentify.ui.components.SectionCard
 
 /**
  * 设置页（规格书第十节、第二十三节）。
@@ -84,6 +87,8 @@ fun SettingsScreen(
     val message by viewModel.message.collectAsStateWithLifecycle()
     val hasSavedKey by viewModel.hasSavedKey.collectAsStateWithLifecycle()
     val strategy by viewModel.strategy.collectAsStateWithLifecycle()
+    val channel by viewModel.channel.collectAsStateWithLifecycle()
+    val plantNetApiKey by viewModel.plantNetApiKey.collectAsStateWithLifecycle()
 
     val sharesOneEndpoint by viewModel.sharesOneEndpoint.collectAsStateWithLifecycle()
     val textForm by viewModel.textForm.collectAsStateWithLifecycle()
@@ -337,6 +342,19 @@ fun SettingsScreen(
                         onTest = viewModel::testTextConnection,
                     )
                 }
+            }
+
+            // 识别通道（v1.0.2 Phase 3 §十六）。
+            // Pl@ntNet 的 Key 属于这条通道自己的配置，与视觉 AI 的 Key 分开存
+            item { SectionTitle("识别通道") }
+
+            item {
+                ChannelSection(
+                    selected = channel,
+                    plantNetApiKey = plantNetApiKey,
+                    onSelect = viewModel::selectChannel,
+                    onApiKeyChange = viewModel::updatePlantNetApiKey,
+                )
             }
 
             item {
@@ -883,6 +901,66 @@ private fun SecurityNoteCard() {
             )
             Text(
                 text = "• AI 给出的结果是参考意见，不作为专业鉴定依据",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/**
+ * 识别通道选择（v1.0.2 Phase 3 §十六）。
+ *
+ * Pl@ntNet 的 Key 输入框只在选了那条通道时展开 —— 视觉 AI 模式下
+ * 它纯属干扰。自动模式的说明写明「冲突要求人工确认」，
+ * 免得用户以为它会自动挑一个"最准"的（不存在这样的判断依据）。
+ */
+@Composable
+private fun ChannelSection(
+    selected: RecognitionChannel,
+    plantNetApiKey: String,
+    onSelect: (RecognitionChannel) -> Unit,
+    onApiKeyChange: (String) -> Unit,
+) {
+    SectionCard(title = "识别通道") {
+        RecognitionChannel.entries.forEach { channel ->
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp),
+            ) {
+                RadioButton(
+                    selected = selected == channel,
+                    onClick = { onSelect(channel) },
+                )
+                Column(Modifier.weight(1f)) {
+                    Text(channel.label, style = MaterialTheme.typography.bodyMedium)
+                    if (channel == RecognitionChannel.AUTO) {
+                        Text(
+                            text = "同时调用两个识别源并比对结论；不一致时要求人工确认，" +
+                                "不会自动取「置信度高」的那一个。",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+        }
+
+        if (selected != RecognitionChannel.VISION_AI) {
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                value = plantNetApiKey,
+                onValueChange = onApiKeyChange,
+                label = { Text("Pl@ntNet API Key") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                placeholder = { Text("在 my.plantnet.org 免费申请") },
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "免费账户每天约 50 次识别；Key 与其他 API Key 一样只加密存放在本机。",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

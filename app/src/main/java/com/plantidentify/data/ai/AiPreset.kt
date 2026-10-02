@@ -163,6 +163,17 @@ data class AiConfig(
     val vision: AiEndpointConfig = defaultVision(),
     val text: AiEndpointConfig? = null,
     val promptStrategy: PromptStrategy = PromptStrategy.DEFAULT,
+
+    /**
+     * Pl@ntNet 通道配置（v1.0.2 Phase 3 §十六）。
+     *
+     * 复用 [AiEndpointConfig]：`baseUrl`（默认 `https://my.plantnet.org`）与
+     * `apiKey` 有意义，`model`/`preset` 不用。null = 未配置。
+     */
+    val plantNet: AiEndpointConfig? = null,
+
+    /** 识别走哪条通道（AI 视觉 / Pl@ntNet / 自动多源比对） */
+    val recognitionChannel: RecognitionChannel = RecognitionChannel.VISION_AI,
 ) {
     val sharesOneEndpoint: Boolean get() = text == null
 
@@ -184,6 +195,33 @@ data class AiConfig(
             model = AiPreset.DEFAULT.textModel,
         )
 
+        /** Pl@ntNet 的默认端点（它不是 OpenAI 兼容服务，preset 无意义） */
+        fun defaultPlantNet(): AiEndpointConfig = AiEndpointConfig(
+            preset = AiPreset.DEFAULT,
+            baseUrl = "https://my.plantnet.org",
+            model = "",
+        )
+
         val EMPTY = AiConfig()
+    }
+}
+
+/**
+ * 识别通道选择（需求 §十六）。
+ *
+ * **AUTO 不是「谁的置信度高用谁」**：两个源的 confidence 语义不同
+ * （一个是语言模型的自估、一个是分类器的后验），相加或平均都是无意义数字 ——
+ * 需求特意点了这条。AUTO 的比较只产出**定性结论**（一致 / 不一致），
+ * 不一致时把双方摆出来要求用户确认。
+ */
+enum class RecognitionChannel(val label: String) {
+    VISION_AI("AI 视觉识别"),
+    PLANT_NET("Pl@ntNet"),
+    AUTO("自动（双源比对）"),
+    ;
+
+    companion object {
+        fun fromName(name: String?): RecognitionChannel =
+            entries.firstOrNull { it.name == name } ?: VISION_AI
     }
 }

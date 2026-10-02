@@ -12,6 +12,7 @@ import com.plantidentify.data.ai.AiSettingsStore
 import com.plantidentify.data.ai.ConnectivityRequest
 import com.plantidentify.data.ai.ConnectivityResult
 import com.plantidentify.data.ai.PromptStrategy
+import com.plantidentify.data.ai.RecognitionChannel
 import com.plantidentify.data.ai.TextProvider
 import com.plantidentify.data.ai.VisionProvider
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -94,6 +95,13 @@ class SettingsViewModel(
     private val _strategy = MutableStateFlow(PromptStrategy.DEFAULT)
     val strategy: StateFlow<PromptStrategy> = _strategy.asStateFlow()
 
+    // 识别通道与 Pl@ntNet（v1.0.2 Phase 3 §十六）
+    private val _channel = MutableStateFlow(RecognitionChannel.VISION_AI)
+    val channel: StateFlow<RecognitionChannel> = _channel.asStateFlow()
+
+    private val _plantNetApiKey = MutableStateFlow("")
+    val plantNetApiKey: StateFlow<String> = _plantNetApiKey.asStateFlow()
+
     private val _saving = MutableStateFlow(false)
     val saving: StateFlow<Boolean> = _saving.asStateFlow()
 
@@ -112,6 +120,8 @@ class SettingsViewModel(
             _textForm.value = config.text ?: AiConfig.defaultText()
             _sharesOneEndpoint.value = config.sharesOneEndpoint
             _strategy.value = config.promptStrategy
+            _channel.value = config.recognitionChannel
+            _plantNetApiKey.value = config.plantNet?.apiKey.orEmpty()
             _hasSavedKey.value = config.vision.apiKey.isNotEmpty()
         }
     }
@@ -146,6 +156,14 @@ class SettingsViewModel(
     }
 
     // ---------------- 文字表单编辑 ----------------
+
+    fun selectChannel(channel: RecognitionChannel) {
+        _channel.value = channel
+    }
+
+    fun updatePlantNetApiKey(value: String) {
+        _plantNetApiKey.value = value
+    }
 
     fun setSharesOneEndpoint(share: Boolean) {
         _sharesOneEndpoint.value = share
@@ -266,11 +284,21 @@ class SettingsViewModel(
         viewModelScope.launch {
             _saving.value = true
             try {
+                val pnKey = _plantNetApiKey.value.trim()
+                // 选了 Pl@ntNet / 自动但 Key 还没填：**不阻止保存** ——
+                // 视觉配置本身是好的，与「文字配置不完整不阻止保存」同一个哲学；
+                // 运行时该通道会报缺 Key 并给出指引
                 val config = AiConfig(
                     vision = candidate,
                     // null 表示「复用视觉配置」
                     text = if (share) null else textCandidate,
                     promptStrategy = _strategy.value,
+                    plantNet = if (_channel.value == RecognitionChannel.VISION_AI && pnKey.isEmpty()) {
+                        null
+                    } else {
+                        AiConfig.defaultPlantNet().copy(apiKey = pnKey)
+                    },
+                    recognitionChannel = _channel.value,
                 )
 
                 store.save(config)
@@ -295,6 +323,8 @@ class SettingsViewModel(
             _textForm.value = AiConfig.defaultText()
             _sharesOneEndpoint.value = true
             _strategy.value = PromptStrategy.DEFAULT
+            _channel.value = RecognitionChannel.VISION_AI
+            _plantNetApiKey.value = ""
             _hasSavedKey.value = false
             _testOutcome.value = null
             _textTestOutcome.value = null
