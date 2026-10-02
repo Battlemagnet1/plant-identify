@@ -243,6 +243,26 @@ class BackupManager(
      * 而恢复流程中间还夹着一个「确认对话框」，用户可能在上面停留很久。
      * 复制到缓存之后就对 URI 时效免疫了。
      */
+    /**
+     * 读出用户在文件选择器里看到的那个文件名。
+     *
+     * ## 为什么需要它（实机验证时暴露的问题）
+     *
+     * [importFromUri] 会把文件复制进缓存并**改名**成 `restore_<时间戳>.zip`
+     * （为了对 SAF 的 URI 时效免疫，见那边的注释）。于是界面上一旦直接用
+     * `file.name`，用户在确认框里看到的就是
+     * 「restore_1790922256433.zip」—— 而那恰恰是让他确认
+     * 「这就是别人发来的那个包」的地方，认不出来的名字等于没有确认。
+     */
+    fun displayNameOf(uri: android.net.Uri): String? = runCatching {
+        context.contentResolver
+            .query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)
+            ?.use { cursor ->
+                val index = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                if (index >= 0 && cursor.moveToFirst()) cursor.getString(index) else null
+            }
+    }.getOrNull()?.takeIf { it.isNotBlank() }
+
     suspend fun importFromUri(uri: android.net.Uri): Result<File> = withContext(Dispatchers.IO) {
         runCatching {
             val dir = File(context.cacheDir, DIR_IMPORTED)
@@ -584,18 +604,14 @@ class BackupManager(
         )
         .toString()
 
-    private class Payload(
-        val plants: List<PlantRecordEntity>,
-        val observations: List<PlantObservationEntity>,
-        val images: List<ObservationImageEntity>,
-        val folders: List<FolderEntity>,
-        val folderPlants: List<FolderPlantEntity>,
-        val landscapeData: List<LandscapeFolderDataEntity>,
-        val importData: List<FolderImportDataEntity>,
-        val importItems: List<FolderImportItemEntity>,
-    )
-
-    private fun readPayload(file: File): Payload {
+    /**
+     * 解开一个备份包，把数据读成内存对象。
+     *
+     * `internal` 而不是 `private`：**导入功能也要读同一个格式**（v1.0.2 Phase 2）——
+     * 「别人发来的数据包」与「自己做的备份」本来就是同一种文件。
+     * 返回类型 [BackupPayload] 定义在文件顶层，理由见那边的注释。
+     */
+    internal fun readPayload(file: File): BackupPayload {
         val json = ZipFile(file).use { zip ->
             val entry = zip.getEntry(ENTRY_DATA)
                 ?: error("备份包不完整（缺少 data.json）")
@@ -725,7 +741,7 @@ class BackupManager(
             )
         }
 
-        return Payload(
+        return BackupPayload(
             plants = plants,
             observations = observations,
             images = images,
@@ -781,6 +797,24 @@ class BackupManager(
         const val FIELD_ID = "id"
     }
 }
+
+/**
+ * 一个备份包解开之后的全部内容。
+ *
+ * 放在文件顶层而不是 [BackupManager] 内部：**导入功能也要读同一个格式** ——
+ * 「别人发来的数据包」与「自己做的备份」本来就是同一种文件，
+ * 没必要解析两遍。藏成嵌套类会让调用方写成 `BackupManager.Payload` 这种别扭形式。
+ */
+internal data class BackupPayload(
+    val plants: List<PlantRecordEntity>,
+    val observations: List<PlantObservationEntity>,
+    val images: List<ObservationImageEntity>,
+    val folders: List<FolderEntity>,
+    val folderPlants: List<FolderPlantEntity>,
+    val landscapeData: List<LandscapeFolderDataEntity>,
+    val importData: List<FolderImportDataEntity>,
+    val importItems: List<FolderImportItemEntity>,
+)
 
 /**
  * `optJSONArray` 在字段缺失时返回 null，转成空列表更省事 ——

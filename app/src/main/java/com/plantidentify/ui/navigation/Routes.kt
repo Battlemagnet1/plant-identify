@@ -144,11 +144,23 @@ object Routes {
      */
     const val FOLDER_PICKER = "folder_picker/{$ARG_PLANT_ID}"
 
+    /**
+     * 导入预览：逐条查看导入的植物与本地库的比对结果，并做出合并 / 保留的决定
+     * （v1.0.2 Phase 2）。
+     *
+     * 与 [MERGE_PREVIEW] 是两件事，别混：
+     *  - 合并预览：**两株**植物的逐字段对比（清洗中心用）
+     *  - 导入预览：**一批**记录各自的处置 —— 先说清「哪些像」，再逐条决定
+     */
+    const val IMPORT_PREVIEW = "import_preview/{$ARG_FOLDER_ID}"
+
     fun folderDetail(folderId: Long): String = "folder/$folderId"
 
     fun folderEdit(folderId: Long): String = "folder_edit/$folderId"
 
     fun folderPicker(plantId: Long): String = "folder_picker/$plantId"
+
+    fun importPreview(folderId: Long): String = "import_preview/$folderId"
 
     const val KEY_PLANT_ID = ARG_PLANT_ID
     const val KEY_OBSERVATION_ID = ARG_OBSERVATION_ID

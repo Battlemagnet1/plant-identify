@@ -64,6 +64,8 @@ import java.io.File
 fun DataManagementScreen(
     onBack: () -> Unit,
     onOpenTrash: () -> Unit,
+    /** 导入完成 → 跳到「导入检查」页（v1.0.2 Phase 2） */
+    onOpenImportPreview: (Long) -> Unit,
     viewModel: DataManagementViewModel,
     modifier: Modifier = Modifier,
 ) {
@@ -75,6 +77,8 @@ fun DataManagementScreen(
     val backups by viewModel.backups.collectAsStateWithLifecycle()
     val locationEnabled by viewModel.locationEnabled.collectAsStateWithLifecycle()
     val locationShareWithAi by viewModel.locationShareWithAi.collectAsStateWithLifecycle()
+    val pendingImport by viewModel.pendingImport.collectAsStateWithLifecycle()
+    val importedFolderId by viewModel.importedFolderId.collectAsStateWithLifecycle()
 
     val snackbarHostState = remember { SnackbarHostState() }
     // 打开开关后给用户的明确交代。用枚举而不是布尔值：
@@ -104,6 +108,13 @@ fun DataManagementScreen(
         ActivityResultContracts.OpenDocument(),
     ) { uri -> if (uri != null) viewModel.prepareRestore(uri) }
 
+    // 导入数据包。与上面那个 launcher 分开写而不是共用一个 ——
+    // 两者选到文件之后的**后果完全不同**（替换 vs 合并），
+    // 共用一个回调会让「用户以为在导入、其实点了恢复」变成可能
+    val pickImportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri -> if (uri != null) viewModel.prepareImport(uri) }
+
     // 只弹提示，**不**顺手清掉任务状态。
     //
     // 曾经写成「弹完 Snackbar 就 consumeTask()」，结果是：导出/备份完成后那张
@@ -119,6 +130,24 @@ fun DataManagementScreen(
         snackbarHostState.showSnackbar(text)
         // 失败没有后续动作，提示过就清掉；成功要留着让用户点分享
         if (task is DataTask.Failed) viewModel.consumeTask()
+    }
+
+    // 接收完成 → 直接带用户去「导入检查」。
+    // 停在数据管理页的话，用户只看到一句「已导入 N 条、其中 M 条需要确认」，
+    // 却不知道该去哪儿处理 —— 那 M 条会一直悬着
+    LaunchedEffect(importedFolderId) {
+        val folderId = importedFolderId ?: return@LaunchedEffect
+        onOpenImportPreview(folderId)
+        viewModel.consumeImportedFolder()
+    }
+
+    pendingImport?.let { pending ->
+        ImportSourceDialog(
+            defaultName = pending.defaultSourceName,
+            fileName = pending.fileName,
+            onDismiss = viewModel::cancelImport,
+            onConfirm = viewModel::confirmImport,
+        )
     }
 
     Scaffold(
@@ -183,6 +212,28 @@ fun DataManagementScreen(
                 onRestoreLocal = viewModel::prepareRestoreFromLocal,
                 onDeleteBackup = viewModel::deleteBackup,
             )
+
+            // 导入别人发来的数据包（v1.0.2 Phase 2，完整版专属）。
+            //
+            // 特意紧挨着备份卡、但**不并进它里面**：两者都要用文件选择器挑一个
+            // .zip，后果却相反 —— 「恢复」清空现有档案，「导入」一条都不动。
+            // 各有独立标题与说明，用户才有机会看明白这个区别。
+            if (AppEdition.isFull) {
+                SectionCard(title = "导入数据包") {
+                    Text(
+                        text = "别人用「备份」导出的数据包可以在这里导入。" +
+                            "导入的数据先进入一个新的「协作文件夹」做重复检查，" +
+                            "再由你逐条决定合并还是保留 —— 不会直接改动现有档案。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    Button(
+                        onClick = { pickImportLauncher.launch(arrayOf("*/*")) },
+                        enabled = task !is DataTask.Running,
+                    ) { Text("选择数据包") }
+                }
+            }
 
             // 回收站只在完整版出现（基础版没有这个页面）
             if (AppEdition.isFull) {

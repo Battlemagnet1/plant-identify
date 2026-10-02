@@ -13,6 +13,7 @@ import com.plantidentify.data.export.DataExporter
 import com.plantidentify.data.export.ExportEstimate
 import com.plantidentify.data.export.ExportMode
 import com.plantidentify.data.export.formatBytes
+import com.plantidentify.data.import.ImportExecutor
 import com.plantidentify.data.location.LocationProvider
 import com.plantidentify.data.location.LocationSettingsStore
 import com.plantidentify.data.repository.PlantRepository
@@ -49,6 +50,19 @@ data class PendingRestore(
 )
 
 /**
+ * 等待用户确认的导入操作（v1.0.2 Phase 2）。
+ *
+ * 与 [PendingRestore] 长得像，语义**完全不同** —— 恢复是整体替换、
+ * 导入是增量合并。所以两者是各自独立的对话框，文案也必须写清楚区别：
+ * 用户在这里点错的代价是「现有档案全没了」。
+ */
+data class PendingImport(
+    val file: File,
+    val fileName: String,
+    val defaultSourceName: String,
+)
+
+/**
  * 数据管理（规格书第二十一、二十二节）。
  *
  * ## 为什么导出前一定要先算体积
@@ -68,6 +82,7 @@ class DataManagementViewModel(
     private val backupManager: BackupManager,
     private val locationSettingsStore: LocationSettingsStore,
     private val locationProvider: LocationProvider,
+    private val importExecutor: ImportExecutor,
 ) : ViewModel() {
 
     private val _task = MutableStateFlow<DataTask>(DataTask.Idle)
@@ -81,6 +96,19 @@ class DataManagementViewModel(
 
     private val _pendingRestore = MutableStateFlow<PendingRestore?>(null)
     val pendingRestore: StateFlow<PendingRestore?> = _pendingRestore.asStateFlow()
+
+    private val _pendingImport = MutableStateFlow<PendingImport?>(null)
+    val pendingImport: StateFlow<PendingImport?> = _pendingImport.asStateFlow()
+
+    /**
+     * 导入完成后的协作文件夹 id。
+     *
+     * 做成一次性事件而不是直接导航：ViewModel 不该持有 NavController。
+     * 界面观察到非空就跳去「导入检查」，跳完调 [consumeImportedFolder] 清掉 ——
+     * 不清的话，用户每次返回这一页都会被再弹一次。
+     */
+    private val _importedFolderId = MutableStateFlow<Long?>(null)
+    val importedFolderId: StateFlow<Long?> = _importedFolderId.asStateFlow()
 
     /**
      * 本机已有的备份包。
@@ -234,6 +262,75 @@ class DataManagementViewModel(
     // ---------------------------------------------------------------- 恢复
 
     /** 用户从文件选择器挑了一个备份包：先复制到本地、读出清单，等用户确认 */
+    /**
+     * 准备导入别人发来的数据包（v1.0.2 Phase 2）。
+     *
+     * 与 [prepareRestore] 并列，但**不是同一件事**，界面文案必须写清区别：
+     *  - 恢复：**整体替换** —— 现有档案全被清掉，用包里的内容取代
+     *  - 导入：**增量合并** —— 现有档案一条不动，包里的内容进一个新文件夹等你确认
+     *
+     * 点错这一处的代价是「现有档案全没了」，所以两者从入口到确认框都不共用。
+     */
+    fun prepareImport(uri: Uri) {
+        viewModelScope.launch {
+            _task.value = DataTask.Running("正在读取数据包…", null)
+            // 原始文件名叫用户认得出的那个（如 `zhangsan_backup.zip`）——
+            // 缓存里的副本被改名成了 restore_<时间戳>.zip，不能拿来显示
+            val originalName = backupManager.displayNameOf(uri)
+            val file = backupManager.importFromUri(uri).getOrElse {
+                _task.value = DataTask.Failed("读不到所选文件：${it.message ?: "未知原因"}")
+                return@launch
+            }
+            _task.value = DataTask.Idle
+            val displayName = originalName ?: file.name
+            _pendingImport.value = PendingImport(
+                file = file,
+                fileName = displayName,
+                // 默认来源名取自原始文件名（去掉扩展名），
+                // 用户可以把它改成「张三的植物库」这种认得出来的名字
+                defaultSourceName = displayName.substringBeforeLast('.'),
+            )
+        }
+    }
+
+    fun cancelImport() {
+        _pendingImport.value = null
+    }
+
+    /**
+     * 确认导入。
+     *
+     * 这一步**不合并任何东西** —— 它只把数据接收进协作文件夹、跑一遍重复检测，
+     * 真正的合并要等用户在「导入检查」页逐条确认。需求原文要求
+     * 「不要未经用户确认直接破坏性合并」，这里就是把那条约束落成流程。
+     */
+    fun confirmImport(sourceName: String) {
+        val pending = _pendingImport.value ?: return
+        _pendingImport.value = null
+        viewModelScope.launch {
+            _task.value = DataTask.Running("正在导入…", null)
+            importExecutor.receive(
+                packageFile = pending.file,
+                sourceName = sourceName,
+                originalFileName = pending.fileName,
+            ).fold(
+                onSuccess = { session ->
+                    _task.value = DataTask.Done(
+                        "已导入 ${session.totalCount} 条；其中 ${session.pendingCount} 条需要确认",
+                    )
+                    _importedFolderId.value = session.folderId
+                },
+                onFailure = { error ->
+                    _task.value = DataTask.Failed("导入失败：${error.message ?: "未知原因"}")
+                },
+            )
+        }
+    }
+
+    fun consumeImportedFolder() {
+        _importedFolderId.value = null
+    }
+
     fun prepareRestore(uri: Uri) {
         if (_task.value is DataTask.Running) return
         viewModelScope.launch {
@@ -304,6 +401,7 @@ class DataManagementViewModel(
             backupManager: BackupManager,
             locationSettingsStore: LocationSettingsStore,
             locationProvider: LocationProvider,
+            importExecutor: ImportExecutor,
         ): ViewModelProvider.Factory = viewModelFactory {
             initializer {
                 DataManagementViewModel(
@@ -312,6 +410,7 @@ class DataManagementViewModel(
                     backupManager,
                     locationSettingsStore,
                     locationProvider,
+                    importExecutor,
                 )
             }
         }

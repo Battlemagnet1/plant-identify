@@ -26,6 +26,8 @@ import com.plantidentify.ui.screens.folders.FolderHomeScreen
 import com.plantidentify.ui.screens.folders.FolderHomeViewModel
 import com.plantidentify.ui.screens.folders.FolderPickerScreen
 import com.plantidentify.ui.screens.folders.FolderPickerViewModel
+import com.plantidentify.ui.screens.imports.ImportPreviewScreen
+import com.plantidentify.ui.screens.imports.ImportPreviewViewModel
 import com.plantidentify.ui.screens.observation.ObservationViewModel
 import com.plantidentify.ui.screens.plants.PlantListViewModel
 import com.plantidentify.ui.screens.addplant.AddPlantScreen
@@ -244,11 +246,15 @@ fun PlantIdentifyNavHost(
                     backupManager = container.backupManager,
                     locationSettingsStore = container.locationSettingsStore,
                     locationProvider = container.locationProvider,
+                    importExecutor = container.importExecutor,
                 ),
             )
             DataManagementScreen(
                 onBack = navController::popBackStack,
                 onOpenTrash = { navController.navigateSingleTop(Routes.TRASH) },
+                onOpenImportPreview = { folderId ->
+                    navController.navigateSingleTop(Routes.importPreview(folderId))
+                },
                 viewModel = dataViewModel,
             )
         }
@@ -429,6 +435,9 @@ fun PlantIdentifyNavHost(
                 onOpenPlant = { plantId ->
                     navController.navigateSingleTop(Routes.plantDetail(plantId))
                 },
+                onOpenImportPreview = { folderId ->
+                    navController.navigateSingleTop(Routes.importPreview(folderId))
+                },
             )
         }
 
@@ -482,6 +491,28 @@ fun PlantIdentifyNavHost(
                 viewModel = folderPickerViewModel,
                 onBack = navController::popBackStack,
                 onSaved = navController::popBackStack,
+            )
+        }
+
+        composable(
+            route = Routes.IMPORT_PREVIEW,
+            arguments = listOf(
+                navArgument(Routes.KEY_FOLDER_ID) { type = NavType.LongType },
+            ),
+        ) { backStackEntry ->
+            val folderId = backStackEntry.arguments?.getLong(Routes.KEY_FOLDER_ID) ?: 0L
+            val importPreviewViewModel: ImportPreviewViewModel = viewModel(
+                key = "import-preview-$folderId",
+                factory = ImportPreviewViewModel.factory(
+                    folderId = folderId,
+                    database = container.database,
+                    mergeExecutor = container.importMergeExecutor,
+                ),
+            )
+            ImportPreviewScreen(
+                viewModel = importPreviewViewModel,
+                onBack = navController::popBackStack,
+                onOpenPlant = { id -> navController.navigateSingleTop(Routes.plantDetail(id)) },
             )
         }
 

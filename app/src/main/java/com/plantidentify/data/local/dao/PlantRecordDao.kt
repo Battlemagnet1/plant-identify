@@ -7,6 +7,7 @@ import androidx.room.Query
 import androidx.room.Transaction
 import androidx.room.Update
 import com.plantidentify.data.local.entity.PlantRecordEntity
+import com.plantidentify.data.local.projection.MatchSnapshotRow
 import com.plantidentify.data.local.projection.PlantCardRow
 import com.plantidentify.data.local.relation.PlantWithObservations
 import com.plantidentify.data.local.relation.PlantWithObservationsAndImages
@@ -51,6 +52,15 @@ interface PlantRecordDao {
 
     @Query("SELECT * FROM plant_record WHERE id = :plantId")
     suspend fun getById(plantId: Long): PlantRecordEntity?
+
+    /**
+     * 按 id 批量取（v1.0.2 Phase 2：导入预览要显示每条导入植物的名字）。
+     *
+     * 一次查完而不是循环调用 [getById] —— 一次导入几百株时，
+     * 逐条查会把「打开预览页」变成几百次数据库往返。
+     */
+    @Query("SELECT * FROM plant_record WHERE id IN (:plantIds)")
+    suspend fun getByIds(plantIds: List<Long>): List<PlantRecordEntity>
 
     /**
      * 搜索：支持中文名 / 拉丁学名 / 科 / 属 / 植物类型 / 备注（规格书第十九节）。
@@ -320,4 +330,25 @@ interface PlantRecordDao {
 
     @Query("DELETE FROM plant_record")
     suspend fun clearAll()
+
+    // ---------- 导入匹配（v1.0.2 Phase 2）----------
+
+    /**
+     * 导入匹配用的**轻量**全表快照。
+     *
+     * 只取六级判定真正会用到的字段，理由见 [MatchSnapshotRow] 的说明 ——
+     * 这里刻意**不**复用 `getAll()`：那个会把 8 个百科长文本一起读出来，
+     * 一万株时正是 `CleaningDataLoader` 会 OOM 的那个量级。
+     *
+     * 软删的档案不参与匹配 —— 它们在回收站里，不该被当成「本地已有的一株」。
+     */
+    @Query(
+        """
+        SELECT id, name, latinName, family, genus,
+               SUBSTR(IFNULL(description, ''), 1, 500) AS description
+        FROM plant_record
+        WHERE deletedAt IS NULL
+        """,
+    )
+    suspend fun getMatchSnapshots(): List<MatchSnapshotRow>
 }

@@ -41,6 +41,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.plantidentify.data.storage.ImageStore
+import com.plantidentify.data.local.entity.FolderType
 import com.plantidentify.domain.model.FolderPlantSort
 import com.plantidentify.ui.components.rememberDateFormatter
 import com.plantidentify.ui.screens.plants.PlantCard
@@ -66,6 +67,8 @@ fun FolderDetailScreen(
     onBack: () -> Unit,
     onEditFolder: (Long) -> Unit,
     onOpenPlant: (Long) -> Unit,
+    /** 协作文件夹的「导入检查」入口（v1.0.2 Phase 2） */
+    onOpenImportPreview: (Long) -> Unit,
 ) {
     val folder by viewModel.folder.collectAsState()
     val plants by viewModel.plants.collectAsState()
@@ -150,6 +153,16 @@ fun FolderDetailScreen(
                         plantCount = plants.size,
                         updatedAt = entity.updatedAt,
                     )
+                }
+
+                // 协作文件夹才有「导入检查」入口（v1.0.2 Phase 2）。
+                //
+                // 「新记录」不需要用户做任何事，但一条「疑似重复」会一直躺在这里 ——
+                // 没有这个入口，用户根本不知道该去哪里处理它
+                if (entity.type == FolderType.COLLABORATION) {
+                    item(key = "import") {
+                        ImportEntryCard(onClick = { onOpenImportPreview(entity.id) })
+                    }
                 }
             }
 
@@ -384,6 +397,37 @@ private fun SelectionActionBar(
                     Text("移除")
                 }
             }
+        }
+    }
+}
+
+/**
+ * 协作文件夹的「导入检查」入口卡（v1.0.2 Phase 2）。
+ *
+ * 只出现在协作文件夹里：别的类型没有「待处理的导入数据」这个概念，
+ * 多一个永远点不出东西的按钮只会让页面变杂。
+ */
+@Composable
+private fun ImportEntryCard(onClick: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+    ) {
+        Column(modifier = Modifier.padding(18.dp)) {
+            Text(
+                text = "导入检查",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Medium,
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = "这批数据里可能有和你已有档案重复的条目。进来逐条看一遍，" +
+                    "决定哪些合并进已有记录、哪些保留为新的。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(10.dp))
+            OutlinedButton(onClick = onClick) { Text("打开导入检查") }
         }
     }
 }

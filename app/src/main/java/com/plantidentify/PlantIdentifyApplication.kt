@@ -17,6 +17,8 @@ import com.plantidentify.data.draft.CaptureDraftStore
 import com.plantidentify.data.export.DataExporter
 import com.plantidentify.data.export.ReportThumbnailer
 import com.plantidentify.data.image.ImageCompressor
+import com.plantidentify.data.import.ImportExecutor
+import com.plantidentify.data.import.ImportMergeExecutor
 import com.plantidentify.data.local.Migrations
 import com.plantidentify.data.local.PlantIdentifyDatabase
 import com.plantidentify.data.cleaning.AiCleaningAdvisor
@@ -222,6 +224,33 @@ class AppContainer(context: Context) {
      */
     val folderRepository: FolderRepository by lazy {
         FolderRepository(database = database)
+    }
+
+    /**
+     * 数据导入的执行层（v1.0.2 Phase 2）。
+     *
+     * 依赖 [backupManager] 而不只是数据库 —— 导入读的正是备份格式：
+     * 「别人发来的数据包」与「自己做的备份」本来就是同一种文件。
+     */
+    val importExecutor: ImportExecutor by lazy {
+        ImportExecutor(
+            context = appContext,
+            database = database,
+            imageStore = imageStore,
+            backupManager = backupManager,
+            folderRepository = folderRepository,
+        )
+    }
+
+    /**
+     * 导入决定的执行体。
+     *
+     * 与 [importExecutor] 分开：接收数据是**不破坏任何东西**的准备工作，
+     * 合并才动到已有的档案。拆成两个对象让「谁有能力改档案」一目了然 ——
+     * 接收那一半根本不持有 `PlantRepository`。
+     */
+    val importMergeExecutor: ImportMergeExecutor by lazy {
+        ImportMergeExecutor(database = database, plantRepository = plantRepository)
     }
 
     /**
