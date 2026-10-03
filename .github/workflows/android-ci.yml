@@ -3,7 +3,10 @@ name: Android CI
 on:
   push:
     branches:
+      # develop 是集成分支：所有功能先合到这里跑一遍，
+      # main 只接收「已经在 develop 上验证过」的内容
       - main
+      - develop
   pull_request:
   workflow_dispatch:
     inputs:
