@@ -17,7 +17,7 @@ Phase 3 自动验收脚本。
 ## 用法
 
     # 完整流程（含配置 AI 服务）
-    python tools/verify_phase3.py --device 192.168.253.119:5555
+    python tools/verify_phase3.py --device <ip>:<port>   # 不传则自动取第一个在线设备
 
     # 已配置过，只跑验证矩阵
     python tools/verify_phase3.py --skip-setup
@@ -59,11 +59,60 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _env  # noqa: E402  —— tools/_env.py，统一解析本机环境
 
 ADB = _env.require_adb_or_exit()
-DEVICE = os.environ.get("ANDROID_SERIAL", "192.168.253.119:5555")
+#   —— 不写死地址：网络设备的 IP 每次重启都会变（见 _env.MISSING_DEVICE_HINT）。
+#      解析放在 main() 里做，好让 --device 能覆盖；ANDROID_SERIAL 仍然优先。
+DEVICE = ""
 MOCK = os.environ.get("MOCK_BASE", "http://127.0.0.1:8899")
 # 允许用环境变量覆盖包名 —— 同一套脚本要能验收 base 与 full 两个版本。
 # 默认仍是基础版的 applicationId。
 PKG = os.environ.get("PKG", "com.plantidentify")
+
+def dismiss_permission_review():
+    """关掉系统的「请选择要向…授予哪些权限」审查页。
+
+    模拟器镜像里有 targetSdk<23 的 legacy 应用（本机是
+    `com.android.coreservice`(21) 与 `com.android.inputmethod.pinyin`(14)）。
+    一旦它们的权限被重置（例如误用整机范围的 `pm reset-permissions`），
+    系统就会在它们每次活动时弹这页审查。它有几个要命的性质：
+
+    - 是**独立窗口**，盖住整屏；
+    - **不改变** topResumedActivity，所以「是否已到前台」检测不出来；
+    - 会把界面文字换成弹窗文字 → 所有界面断言读到它，报「流程未走通」。
+
+    这不是产品缺陷而是设备状态，点「继续」一次结清（取消可能保持待审查）。
+    """
+    if "授予哪些权限" in screen_text():
+        if tap_text("继续", exact=True, timeout=5):
+            time.sleep(1.5)
+            return True
+    return False
+
+def dismiss_location_prompt():
+    """关掉可能挡住界面的**位置相关**弹窗（如果正开着）。
+
+    有两种，都要处理 —— 脚本原先只认第一种：
+
+    1. 应用自己的「记录观察地点？」：onDismissRequest 故意不响应，
+       返回键也关不掉，必须显式二选一。
+    2. **系统的权限申请框**（「要允许…获取此设备的位置信息吗？」）——
+       权限被 revoke / 首次安装后启动应用时会出现，它盖住**整屏**，
+       后面每一次点击都会打在它身上，报成「找不到某某按钮」。
+       实测就卡在这里：权限一 revoke，整条回归全线失败。
+
+    这里对系统框一律选「不允许」（保持环境干净）；
+    需要真正授权的断言会自己再去点「允许」。
+    """
+    dismiss_permission_review()
+
+    if "记录观察地点？" in screen_text():
+        if tap_text("暂不允许", exact=True, timeout=5):
+            time.sleep(1.5)
+            return True
+    if "获取此设备的位置信息吗" in screen_text() or "位置信息" in screen_text() and "允许" in screen_text():
+        if tap_text("不允许", exact=True, timeout=5):
+            time.sleep(1.5)
+            return True
+    return False
 
 def start_app():
     """启动应用（组件名动态解析，兼容基础版与完整版）。
@@ -75,16 +124,28 @@ def start_app():
     那是**不存在的类**，启动会静默失败，后续所有界面断言都会读到一个
     根本不是目标应用的界面。
 
-    所以这里先问系统要真正的启动组件，问不到再退回简写。
+    先问系统要真正的启动组件；问不到才退回显式类名（不带 flavor 后缀）。
+    ⚠️ 退回分支里**绝不能**调 start_app() 自我调用 —— 那是无限递归，
+       实测在设备不可达时抛 RecursionError（984 层），把真错误盖掉。
+
+    启动后顺手关掉可能弹出来的「记录观察地点？」：那个对话框的
+    onDismissRequest 故意不响应（必须显式二选一），返回键也关不掉，
+    留在屏幕上会让后面所有点击打在它身上。
     """
+    component = None
     out = shell("cmd", "package", "resolve-activity", "--brief", PKG)
     for line in reversed(out.replace("\r", "").split("\n")):
         line = line.strip()
         if line.startswith(PKG + "/"):
-            shell("am", "start", "-n", line)
-            return True
-    start_app()
-    return False
+            component = line
+            break
+    if component is None:
+        component = f"{PKG}/com.plantidentify.MainActivity"
+        print(f"resolve-activity 没给出 {PKG} 的启动组件，退回 {component}", flush=True)
+    shell("am", "start", "-n", component)
+    time.sleep(4)
+    dismiss_location_prompt()
+    return True
 
 
 OUT_DIR = os.environ.get(
@@ -214,7 +275,17 @@ def scroll_up(times: int = 1) -> None:
 
 
 def scroll_to(text: str, exact: bool = True, tries: int = 6) -> bool:
-    """向下滚动直到目标出现"""
+    """把目标滚进视口（**先回顶部，再向下找**）。
+
+    只朝下找是不够的：目标可能在当前视口的**上方**。最典型的情形是
+    「刚保存过配置、视口停在页面底部」，这时「测试连接」就在上面 ——
+    而只往下的实现会一直找不到，表现成「按钮不存在」，于是人跑去怀疑
+    界面，其实问题在脚本。（verify_phase6/6plus 的同名函数本来就是
+    「回顶再往下」，这里补齐。）
+    """
+    if find(text, exact=exact) is not None:
+        return True
+    scroll_up(times=8)
     for _ in range(tries):
         if find(text, exact=exact) is not None:
             return True
@@ -229,8 +300,13 @@ def type_text(value: str) -> None:
 
 def hide_keyboard() -> None:
     """只在键盘确实可见时按返回，否则会误触发页面返回（见文件头第 4 条坑）"""
+    # ⚠️ 判据只能用 mInputShown。实测（SM-S9380 / 2026-10-03）：
+    #    `mIsInputViewShown` 在键盘**隐藏时也是 true**，拿它当判据会让这个
+    #    函数每次都按一次返回 —— 而返回键在设置页会直接把页面弹掉。
+    #    于是后面所有「滚动找按钮」都在首页上找，报成「按钮不存在」，
+    #    害人去怀疑界面。mInputShown 才有区分度（隐藏 false / 弹出 true）。
     info = shell("dumpsys", "input_method")
-    if "mInputShown=true" in info or "mIsInputViewShown=true" in info:
+    if "mInputShown=true" in info:
         shell("input", "keyevent", "4")
         time.sleep(0.8)
 
@@ -289,8 +365,17 @@ def open_app() -> None:
     time.sleep(5)
 
 
-def goto_result_page() -> bool:
-    """从首页走一遍：添加植物 → 开始识别 → 等到结果页"""
+def ensure_photos(count: int = 3) -> bool:
+    """确保「添加植物」页的草稿里至少有 `count` 张照片。
+
+    ⚠️ 这一步原先漏了：脚本直接在添加植物页上点「开始识别」，
+    而**0 张照片时那个按钮是禁用的** —— 点了没有任何反应，页面纹丝不动，
+    失败信息只会写成「未能到达结果页」，完全看不出是「按钮被禁用」。
+    在 base 上之所以一直过，是因为那台设备的草稿里还留着上一次测试的照片；
+    全新安装（或 pm clear 之后）必挂。
+
+    选图靠相册里已有的图片（相册在共享存储里，pm clear 不会清掉）。
+    """
     open_app()
     if not tap_text("添加植物", exact=True, timeout=20):
         # 首页按钮文字可能带图标描述，回退到模糊
@@ -298,12 +383,43 @@ def goto_result_page() -> bool:
             return False
     time.sleep(3)
 
+    m = re.search(r"已添加 (\d)/5", screen_text())
+    have = int(m.group(1)) if m else 0
+    if have >= count:
+        print(f"    草稿已有 {have} 张照片，跳过选图")
+        return True
+
+    need = count - have
+    if not tap_text("从相册选择", exact=True, timeout=15):
+        print("    x 找不到「从相册选择」")
+        return False
+    time.sleep(5)
+
+    # 相册网格：第 i 张的落点。坐标来自这个 1920x1080 的模拟器（phase4/5 同款）
+    for i in range(need):
+        shell("input", "tap", str(104 + i * 213), "491")
+        time.sleep(1.0)
+    time.sleep(1.5)
+
+    if not tap_text("添加（", timeout=15):
+        print("    x 找不到相册的「添加（N）」确认按钮")
+        return False
+    time.sleep(6)
+    return True
+
+
+def goto_result_page() -> bool:
+    """从首页走一遍：添加植物 → 选照片 → 开始识别 → 等到结果页"""
+    if not ensure_photos(3):
+        return False
+
     if not scroll_to("开始识别", exact=True):
         return False
     if not tap_text("开始识别", exact=True, timeout=10):
         return False
 
     return wait_for_any(["模型置信度", "识别失败"], timeout=70) is not None
+
 
 
 def retrigger(mode: str, expect: list[str], timeout: int = 45) -> bool:
@@ -324,10 +440,18 @@ def retrigger(mode: str, expect: list[str], timeout: int = 45) -> bool:
 
 
 def configure_via_ui(base_url: str, model: str, api_key: str) -> bool:
-    """在设置页填好三项配置。
+    """在设置页填好三项配置（Base URL / 模型名 / API Key）。
 
-    定位输入框时用**精确匹配**：状态卡上会出现「还缺少：Base URL、模型名」
-    这样的文字，模糊匹配会点到状态卡上（见文件头第 3 条坑）。
+    两处都刻意改了写法，因为原写法在**已经有配置**的机器上会产出垃圾：
+
+    1. **按输入框顺序填（上→下），不按 label 文字点**：label 是独立的 Text
+       节点，Compose 里文字自己不可点，点到的是外层容器，焦点不一定落在
+       输入框上 —— 实测把 API Key 填进了 model 字段。
+    2. **每次填之前先清空**：`input text` 是**追加**而不是替换，字段里已有值
+       时会拼起来 —— 实测把 baseUrl 拼成
+       `httphttp://127.0.0.1:8899/v1://127.0.0.1:8899/v1`。
+
+    填完立刻回读校验（API Key 是密码框、界面只有圆点，跳过它）。
     """
     if not tap_text("设置", exact=True, timeout=15):
         return False
@@ -336,34 +460,204 @@ def configure_via_ui(base_url: str, model: str, api_key: str) -> bool:
     tap_text("自定义", timeout=10)
     time.sleep(1.2)
 
-    if tap_text("Base URL", exact=True, timeout=10):
-        time.sleep(1)
-        type_text(base_url)
-        hide_keyboard()
+    return fill_config_fields(base_url, model, api_key)
 
-    if tap_text("模型名", exact=True, timeout=10):
-        time.sleep(1)
-        type_text(model)
-        hide_keyboard()
 
-    if tap_text("API Key", exact=True, timeout=10):
-        time.sleep(1)
-        type_text(api_key)
-        hide_keyboard()
+# 设置页里三个配置输入框的标签。Compose 的 label 是独立的 Text 节点，
+# 文字自己不可点 —— 但它正好可以当「稳定 id」用：滚多少次、屏内还剩几个框，
+# 标签与框的对应关系都不变。
+FIELD_LABELS = ("Base URL", "模型名", "API Key")
 
+
+def _parse_fields(root):
+    """从界面树里挑出「字段标签」与「输入框」两类节点。
+
+    返回 (labels, boxes)：
+      labels = [(标签文本, 中心y)]
+      boxes  = [(中心x, 中心y, y1, y2, 文本)]
+    """
+    labels, boxes = [], []
+    if root is None:
+        return labels, boxes
+    for node in root.iter("node"):
+        m = re.match(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", node.get("bounds") or "")
+        if not m:
+            continue
+        x1, y1, x2, y2 = map(int, m.groups())
+        v = ntext(node)
+        if v in FIELD_LABELS:
+            labels.append((v, (y1 + y2) // 2))
+        elif "EditText" in (node.get("class") or ""):
+            boxes.append(((x1 + x2) // 2, (y1 + y2) // 2, y1, y2, v))
+    return labels, boxes
+
+
+
+def _box_for(label, labels, boxes):
+    """返回 `label` 对应的输入框 (cx, cy, y1, y2, text)，找不到返回 None。
+
+    配对规则：**优先取「包含了标签 y 的那个框」**，否则取纵向距离最近的框。
+
+    为什么不是「取标签正下方的框」：Material 3 的 OutlinedTextField 在有值或
+    聚焦时会把 label **浮动到输入框的上边线上** —— 标签的 y 落在**它自己那个
+    框的范围内**。用「框的 y1 >= 标签 y」过滤会把它自己的框排掉，于是配到
+    **下一个**字段的框。实测就错在这里：Base URL 的值被填进了「模型名」，
+    而填「模型名」时又去够「API Key」那一格，整条链路错位一格。
+    """
+    if any(nm == label for nm, _ in labels) is False or not boxes:
+        return None
+    lab_y = next(ly for nm, ly in labels if nm == label)
+
+    def gap(bx):
+        y1, y2 = bx[2], bx[3]
+        if y1 <= lab_y <= y2:          # 标签就在这个框里 —— 最可信
+            return 0
+        return min(abs(lab_y - y1), abs(lab_y - y2))
+
+    return min(boxes, key=gap)
+
+
+
+def field_boxes():
+    """{标签: (中心x, 中心y, y1, y2, 文本)} —— 见 `_box_for` 的配对规则。
+
+    按标签而不是按序号取框：滚动会改变「哪些框还在屏内」，序号随之失效 ——
+    实测在完整版上为实现「把第 3 个框滚进安全区」只滚了一下，列表就从
+    3 个变成 2 个，`index=2` 直接不存在，而目标框其实好好地在列表第 2 位。
+    """
+    labels, boxes = _parse_fields(dump())
+    out = {}
+    for name, _ly in labels:
+        bx = _box_for(name, labels, boxes)
+        if bx is not None:
+            out[name] = bx
+    return out
+
+
+
+def clear_focused_field() -> None:
+    """清空当前聚焦的输入框（光标移末尾 + 连发删除键）。
+
+    `input keyevent` 支持一次传多个 keycode，所以**一次 adb 调用**就够 ——
+    逐个循环调用会把 60 次往返的延迟全摊在这上面。
+    """
+    shell("input", "keyevent", "123")            # MOVE_END：光标移到末尾
+    shell("input", "keyevent", *(["67"] * 60))   # DEL × 60
+
+
+def screen_height() -> int:
+    """屏幕高度。横屏时 `wm size` 给的是「宽x高」，第二个数才是高。"""
+    m = re.search(r"(\d+)x(\d+)", shell("wm", "size"))
+    return int(m.group(2)) if m else 1080
+
+
+def field_box(label: str) -> bool:
+    """把 `label` 对应的输入框滚进**安全区**再点它。
+
+    判据沿用项目的老规矩：**中心点落在 0.05H–0.95H 内**才算点得到。
+    实测反例：完整版设置页的 API Key 那格停在 y=1066..1080，中心 1073 = 0.99H，
+    点它等于点系统手势区 —— 焦点不落在输入框，紧跟的 `input text`
+    会写进**上一个**字段。
+
+    每一次循环都重新 dump：页面动过之后旧坐标与旧序号全废。
+    """
+    h = screen_height()
+    last = None
+    for _ in range(12):
+        labels, boxes = _parse_fields(dump())
+        if not any(nm == label for nm, _ in labels):
+            # 标签不在屏内 —— 先把它找出来（scroll_to 会先回顶再向下扫）
+            scroll_to(label, exact=True)
+            labels, boxes = _parse_fields(dump())
+            if not any(nm == label for nm, _ in labels):
+                print(f"      ✗ 找不到标签「{label}」；屏上标签={[n for n, _ in labels]} "
+                      f"输入框={[b[4] for b in boxes]}")
+                return False
+
+        box = _box_for(label, labels, boxes)
+        if box is None:
+            return False
+        cx, cy, y1, y2, _txt = box
+        last = (y1, y2)
+        if 0.05 * h <= cy <= 0.95 * h:
+            shell("input", "tap", str(cx), str(cy))
+            time.sleep(0.8)
+            return True
+        # 不在安全区：朝能让它进屏的方向滚
+        if cy > 0.95 * h:
+            scroll_down()
+        else:
+            scroll_up()
+
+    print(f"      ✗ 「{label}」滚不进安全区（最后一次 y1={last[0]} y2={last[1]} 屏高={h}）")
+    return False
+
+
+
+def field_text(label: str) -> str:
+    """回读 `label` 对应输入框的文本（密码框只回得到圆点或无，视为读不到）。"""
+    for _ in range(3):
+        box = field_boxes().get(label)
+        if box is not None:
+            return box[4]
+        scroll_to(label, exact=True)
+    return ""
+
+
+
+def fill_field(label: str, value: str, verify: bool = True) -> bool:
+    """把 value 填进 `label` 对应的输入框，并按需回读确认。"""
+    hide_keyboard()
+    if not field_box(label):
+        return False
+    clear_focused_field()
+    time.sleep(0.4)
+    type_text(value)
+    hide_keyboard()
+    if not verify:
+        return True
+    return field_text(label) == value
+
+
+def fill_config_fields(base_url: str, model: str, api_key: str) -> bool:
+    """按**标签**填三项，并确认表单真的完整了。
+
+    密码框（API Key）界面只显示圆点、读不回原文 —— 所以它的正确性靠
+    **状态卡**确认：配置不全时状态卡写着
+    「视觉识别配置不完整 / 还缺少：API Key」，三项齐了这段才会消失。
+    这一步是必需的：原先对密码框既不回读、也不检查返回值，
+    填失败是**静默**的 —— 日志显示「填写三项配置 PASS」，
+    实际 Key 没进去，后面「测试连接 / 保存配置」全因按钮禁用而失败。
+    """
+    todo = (("Base URL", base_url, True), ("模型名", model, True),
+            ("API Key", api_key, False))
+    for label, value, verify in todo:
+        if not fill_field(label, value, verify=verify):
+            print(f"      ✗ 填「{label}」失败：找不到该输入框，或滚不进安全区")
+            return False
+        print(f"      填 {value!r} → 「{label}」"
+              + ("回读命中" if verify else "（密码框，靠状态卡确认）"))
+
+    time.sleep(1.2)
+    st = screen_text()
+    if "还缺少" in st or "配置不完整" in st:
+        missing = [ln for ln in st.splitlines() if "还缺少" in ln or "不完整" in ln]
+        print(f"      ✗ 表单仍不完整：{missing}")
+        return False
     return True
+
 
 
 def main() -> int:
     global DEVICE
     parser = argparse.ArgumentParser()
-    parser.add_argument("--device", default=DEVICE)
+    parser.add_argument("--device", default="", help="不传则自动取第一个在线设备")
     parser.add_argument("--skip-setup", action="store_true")
     parser.add_argument("--base-url", default="http://127.0.0.1:8899/v1")
     parser.add_argument("--model", default="mock-vl")
     parser.add_argument("--api-key", default="test-key-1234567890abcdef")
     args = parser.parse_args()
-    DEVICE = args.device
+    DEVICE = args.device or _env.require_device_or_exit(ADB)
 
     print("=" * 70)
     print("Phase 3 验收：AI 视觉识别链路")

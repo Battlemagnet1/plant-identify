@@ -51,7 +51,20 @@ if [ -z "$ADBEXE" ] || { [ ! -f "$ADBEXE" ] && [ ! -x "$ADBEXE" ]; }; then
 fi
 
 # 设备：ANDROID_SERIAL 优先，默认值与原来一致（模拟器）
-D="${ANDROID_SERIAL:-192.168.253.119:5555}"
+# 设备：ANDROID_SERIAL 优先；否则取 adb devices 里第一个在线设备。
+# 以前这里写死了一个模拟器地址。网络连接的设备（adb connect <ip>:<port>）
+# **每次重启 IP 都会变**，写死等于埋一个必然失败的默认值 ——
+# 而且报出来只是「设备不可达」，看着像设备的问题，实际是脚本的问题。
+D="${ANDROID_SERIAL:-}"
+if [ -z "$D" ]; then
+  D="$("$ADBEXE" devices | awk 'NR>1 && $2=="device" {print $1; exit}')"
+fi
+if [ -z "$D" ]; then
+  echo "没有可用设备。把设备开起来，或 adb connect <ip>:<port>，或设置 ANDROID_SERIAL"
+  "$ADBEXE" devices
+  exit 1
+fi
+echo "设备：$D"
 
 # 交给 adb 的路径必须是 Windows 风格：Git Bash 的 /d/... 会让它报 failed to stat，
 # 而 install 的退出码还可能是 0（这就是文件头那条防呆的由来）。
@@ -90,7 +103,8 @@ txt() { "$ADBEXE" -s "$D" exec-out uiautomator dump /dev/tty 2>/dev/null; }
 launch() {
   local pkg="$1"
   local cmp
-  cmp="$("$ADBEXE" -s "$D" shell cmd package resolve-activity --brief "$pkg" 2>/dev/null | tr -d '' | tail -1)"
+  cmp="$("$ADBEXE" -s "$D" shell cmd package resolve-activity --brief "$pkg" 2>/dev/null | tr -d '
+' | tail -1)"
   if [ -z "$cmp" ] || [ "$cmp" = "No activity found" ]; then
     echo "        解析不到 $pkg 的启动组件"
     return 1
@@ -99,17 +113,49 @@ launch() {
 }
 front() { "$ADBEXE" -s "$D" shell dumpsys activity activities 2>/dev/null | grep -m1 topResumedActivity | grep -oE 'com\.[a-z.]+/' ; }
 
-# 等目标包真的到前台，最多等 12 秒。等不到就返回非零 —— 调用方必须据此中止，
-# 而不是拿眼前这个不知道是谁的界面继续断言
+# 等目标包真的到前台，最多等 45 秒。等不到就返回非零 —— 调用方必须据此中止，
+# 而不是拿眼前这个不知道是谁的界面继续断言。
+#
+# 为什么不是 12 秒：`install -r` 之后的**第一次冷启动**要跑 dexopt，
+# 实测会超过 12 秒，于是报「启动后没进前台」，看起来像应用起不来，
+# 其实只是等太短。中途再补一次 am start，防止冷启动被系统推迟时干等。
 wait_front() {
-  local pkg="$1"
-  for _ in $(seq 1 12); do
+  local pkg="$1" i cmp
+  cmp="$("$ADBEXE" -s "$D" shell cmd package resolve-activity --brief "$pkg" 2>/dev/null | tr -d '' | tail -1)"
+  for i in $(seq 1 45); do
     case "$(front)" in
       "$pkg"/*) return 0 ;;
     esac
+    if [ "$i" = "15" ] || [ "$i" = "30" ]; then
+      [ -n "$cmp" ] && "$ADBEXE" -s "$D" shell am start -n "$cmp" >/dev/null 2>&1
+    fi
     sleep 1
   done
   return 1
+}
+
+# 点一个纯文本节点（取它 bounds 的中心）。找不到返回 1。
+tap_text() {
+  local want="$1" pos coords
+  pos="$(txt | tr '<' '
+' | grep -F "text=\"$want\""         | grep -oE 'bounds="\[[0-9]+,[0-9]+\]\[[0-9]+,[0-9]+\]"' | head -1)"
+  [ -z "$pos" ] && return 1
+  coords=$(echo "$pos" | grep -oE '[0-9]+')
+  set -- $coords
+  "$ADBEXE" -s "$D" shell input tap $(( ($1 + $3) / 2 )) $(( ($2 + $4) / 2 ))
+  return 0
+}
+
+# 关掉可能盖住界面的弹窗：应用自己的「记录观察地点？」与**系统的**位置权限框。
+# 两者都**不会**改变 topResumedActivity（所以 wait_front 察觉不到），
+# 却会把界面文字换成弹窗文字 —— 于是「首页渲染出来了」这类断言假失败。
+dismiss_dialogs() {
+  local t
+  t="$(txt)"
+  if echo "$t" | grep -q "记录观察地点"; then tap_text "暂不允许" && sleep 1.5; fi
+  t="$(txt)"
+  if echo "$t" | grep -q "获取此设备的位置信息吗"; then tap_text "不允许" && sleep 1.5; fi
+  return 0
 }
 
 "$ADBEXE" connect "$D" >/dev/null 2>&1
@@ -145,6 +191,7 @@ sleep 1
 launch com.plantidentify
 
 if wait_front com.plantidentify; then
+  dismiss_dialogs
   ok "基础版启动并进入前台"
   sleep 3
   HOME=$(txt)
@@ -192,6 +239,7 @@ sleep 1
 launch com.plantidentify.full
 
 if wait_front com.plantidentify.full; then
+  dismiss_dialogs
   ok "完整版启动并进入前台"
   sleep 3
   FULL=$(txt)

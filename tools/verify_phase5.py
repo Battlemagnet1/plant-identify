@@ -37,11 +37,60 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _env  # noqa: E402  —— tools/_env.py，统一解析本机环境
 
 ADB = _env.require_adb_or_exit()
-D = os.environ.get("ANDROID_SERIAL", "192.168.253.119:5555")
+D = _env.require_device_or_exit(ADB)
+#   —— 不写死地址：网络设备的 IP 每次重启都会变（见 _env.MISSING_DEVICE_HINT）；
+#      ANDROID_SERIAL 仍然优先，显式指定不会被覆盖
 MOCK = os.environ.get("MOCK_BASE", "http://127.0.0.1:8899")
 # 允许用环境变量覆盖包名 —— 同一套脚本要能验收 base 与 full 两个版本。
 # 默认仍是基础版的 applicationId。
 PKG = os.environ.get("PKG", "com.plantidentify")
+
+def dismiss_permission_review():
+    """关掉系统的「请选择要向…授予哪些权限」审查页。
+
+    模拟器镜像里有 targetSdk<23 的 legacy 应用（本机是
+    `com.android.coreservice`(21) 与 `com.android.inputmethod.pinyin`(14)）。
+    一旦它们的权限被重置（例如误用整机范围的 `pm reset-permissions`），
+    系统就会在它们每次活动时弹这页审查。它有几个要命的性质：
+
+    - 是**独立窗口**，盖住整屏；
+    - **不改变** topResumedActivity，所以「是否已到前台」检测不出来；
+    - 会把界面文字换成弹窗文字 → 所有界面断言读到它，报「流程未走通」。
+
+    这不是产品缺陷而是设备状态，点「继续」一次结清（取消可能保持待审查）。
+    """
+    if "授予哪些权限" in screen_text():
+        if tap("继续", exact=True, timeout=5):
+            time.sleep(1.5)
+            return True
+    return False
+
+def dismiss_location_prompt():
+    """关掉可能挡住界面的**位置相关**弹窗（如果正开着）。
+
+    有两种，都要处理 —— 脚本原先只认第一种：
+
+    1. 应用自己的「记录观察地点？」：onDismissRequest 故意不响应，
+       返回键也关不掉，必须显式二选一。
+    2. **系统的权限申请框**（「要允许…获取此设备的位置信息吗？」）——
+       权限被 revoke / 首次安装后启动应用时会出现，它盖住**整屏**，
+       后面每一次点击都会打在它身上，报成「找不到某某按钮」。
+       实测就卡在这里：权限一 revoke，整条回归全线失败。
+
+    这里对系统框一律选「不允许」（保持环境干净）；
+    需要真正授权的断言会自己再去点「允许」。
+    """
+    dismiss_permission_review()
+
+    if "记录观察地点？" in screen_text():
+        if tap("暂不允许", exact=True, timeout=5):
+            time.sleep(1.5)
+            return True
+    if "获取此设备的位置信息吗" in screen_text():
+        if tap("不允许", exact=True, timeout=5):
+            time.sleep(1.5)
+            return True
+    return False
 
 def start_app():
     """启动应用（组件名动态解析，兼容基础版与完整版）。
@@ -53,16 +102,28 @@ def start_app():
     那是**不存在的类**，启动会静默失败，后续所有界面断言都会读到一个
     根本不是目标应用的界面。
 
-    所以这里先问系统要真正的启动组件，问不到再退回简写。
+    先问系统要真正的启动组件；问不到才退回显式类名（不带 flavor 后缀）。
+    ⚠️ 退回分支里**绝不能**调 start_app() 自我调用 —— 那是无限递归，
+       实测在设备不可达时抛 RecursionError（984 层），把真错误盖掉。
+
+    启动后顺手关掉可能弹出来的「记录观察地点？」：那个对话框的
+    onDismissRequest 故意不响应（必须显式二选一），返回键也关不掉，
+    留在屏幕上会让后面所有点击打在它身上。
     """
+    component = None
     out = shell("cmd", "package", "resolve-activity", "--brief", PKG)
     for line in reversed(out.replace("\r", "").split("\n")):
         line = line.strip()
         if line.startswith(PKG + "/"):
-            shell("am", "start", "-n", line)
-            return True
-    start_app()
-    return False
+            component = line
+            break
+    if component is None:
+        component = f"{PKG}/com.plantidentify.MainActivity"
+        print(f"resolve-activity 没给出 {PKG} 的启动组件，退回 {component}", flush=True)
+    shell("am", "start", "-n", component)
+    time.sleep(4)
+    dismiss_location_prompt()
+    return True
 
 
 OUT_DIR = os.environ.get(
@@ -137,6 +198,21 @@ def screen_text():
     if root is None:
         return ""
     return "\n".join(ntext(n) for n in root.iter("node") if ntext(n))
+
+
+def dialog_text():
+    """只取当前屏，**绝不滚动** —— 专用于读取弹窗。
+
+    为什么不能直接用 collect_all_text()：它先 scroll_top 再 scroll_down，
+    而 scroll_down 的手势是「从 y=900 向下滑到 y=350」—— 起点落在弹窗
+    下缘之外，系统把它当成一次「点到了弹窗外」从而**关掉弹窗**。
+    实测：植物删除弹窗（下缘 y=727）读完之后就没了，紧接着的
+    「点确认按钮」自然找不到目标。归并弹窗侥幸没中招，只是因为它够高、
+    起点碰巧还在卡片内 —— 靠运气的事不能留。
+
+    弹窗本来就完整可见，单次 dump 足够，不需要滚动。
+    """
+    return screen_text()
 
 
 def tap(text, exact=False, timeout=15):
@@ -592,6 +668,11 @@ def db_snapshot():
 
     snapshot = {
         "plants": scalar("SELECT COUNT(*) FROM plant_record"),
+        # 在用（未进回收站）的档案数。上面那个 "plants" 是**全部行**（含回收站），
+        # 软删不会让它减少 —— 想验「删除后少了一株」必须看 active。
+        "active": scalar(
+            "SELECT COUNT(*) FROM plant_record WHERE deletedAt IS NULL"
+        ),
         "observations": scalar("SELECT COUNT(*) FROM plant_observation"),
         "images": scalar("SELECT COUNT(*) FROM observation_image"),
         "name": query_plants(cur),
@@ -603,6 +684,8 @@ def db_snapshot():
 def query_plants(cur):
     cur.execute(
         "SELECT p.id, p.name, p.latinName, "
+        # 软删标记：删除只是置 deletedAt，行还在（回收站要能恢复）
+        "p.deletedAt IS NOT NULL AS deleted, "
         "(SELECT COUNT(*) FROM plant_observation o WHERE o.plantId = p.id) AS obs, "
         "(SELECT COUNT(*) FROM observation_image i "
         "   JOIN plant_observation o2 ON i.observationId = o2.id "
@@ -615,6 +698,18 @@ def query_plants(cur):
 def plants_named(name):
     """库里叫这个名字的档案（按 id）"""
     return [p for p in LAST_SNAPSHOT["name"] if p["name"] == name]
+
+
+def active_named(name):
+    """**在用**（未进回收站）的同名档案。
+
+    归并匹配只看在用档案 —— 软删的不参与重复判定，所以断言也不该把它们
+    算进来。实测教训：用 `plants_named` 判断「库里有没有同名档案」时，
+    [E] 软删掉的那株仍会被数进去，于是 [C] 以为有候选、而匹配器看不到，
+    报成「没弹归并提示」的假失败。
+    """
+    return [p for p in LAST_SNAPSHOT["name"]
+            if p["name"] == name and not p.get("deleted")]
 
 
 def refresh():
@@ -737,6 +832,20 @@ print("    （先跑这条：后面的 A/B 依赖它建立「已有档案」）"
 refresh()
 c_before = LAST_SNAPSHOT.copy()
 
+# 归并提示的前提是「库里**在用**的档案里有同名的」。
+# 而 [E] 每轮会把最后一株软删进回收站 —— 下一轮跑到这里时库里就没有
+# 任何在用的紫薇了，保存会（正确地）直接新建，于是下面三条断言全成假失败。
+# 这里先补一次建档把前提补齐（已经有在用的同名档案就跳过）。
+if not active_named("紫薇"):
+    print("    库里没有在用的同名档案 —— 先建档一次，让「归并提示」的前提成立")
+    if run_recognition_to_result():
+        _first = save_and_wait()
+        check("首次建档：库里无同名档案时直接保存（不误报重复）", _first == "saved",
+              f"实际 outcome={_first}")
+        c_before = refresh()   # 后续断言以「建档后」为基线
+    else:
+        check("首次建档", False, "流程未走通")
+
 if run_recognition_to_result():
     check("识别完成", True)
     outcome = save_and_wait()
@@ -746,7 +855,7 @@ if run_recognition_to_result():
           f"实际 outcome={outcome}")
 
     if outcome == "merge":
-        decision = collect_all_text()
+        decision = dialog_text()
         check("提示里给出匹配依据", "判断依据" in decision, decision[-300:])
         check("提示里说明将变为第几次观察", "第" in decision and "次观察" in decision)
         check("提供「添加到已有植物」", "添加到已有植物" in decision)
@@ -770,7 +879,7 @@ if run_recognition_to_result():
               after["observations"] == c_before["observations"] + 1,
               f"{c_before['observations']} -> {after['observations']}")
 
-        same_name = plants_named("紫薇")
+        same_name = active_named("紫薇")
         check("库里存在多份同名档案且互不合并（验收标准 ④）",
               len(same_name) >= 2, f"同名档案 {len(same_name)} 份")
     else:
@@ -784,13 +893,13 @@ print("\n[A] 第二次识别同一植物 → 添加到已有植物（验收标�
 
 refresh()
 a_before = LAST_SNAPSHOT.copy()
-# 挑一份观察数最少的同名档案作为目标，便于观察「观察数 +1」
-targets = [p for p in plants_named("紫薇") if p["obs"] >= 1]
-target = min(targets, key=lambda p: (p["obs"], p["id"])) if targets else None
-print(f"    目标档案：#{target['id']}（当前 {target['obs']} 次观察 / "
-      f"{target['imgs']} 张照片）" if target else "    ⚠ 找不到可用的目标档案")
+# 归并到**哪一份**同名档案由匹配器决定（弹窗只给一个建议档案），
+# 脚本无法指定目标。所以用「谁的观察数 +1」反推实际被并入的那一份 ——
+# 原先按「观察数最少」预设一个 target，实测一直在核对一份根本没被改动的档案。
+same_plants = active_named("紫薇")
+print(f"    合并前同名档案 {len(same_plants)} 份；库中总计 {a_before['plants']} 份")
 
-if target and run_recognition_to_result():
+if same_plants and run_recognition_to_result():
     check("识别完成", True)
     outcome = save_and_wait()
     check("出现归并提示", outcome == "merge", f"outcome={outcome}")
@@ -808,16 +917,28 @@ if target and run_recognition_to_result():
                   after["observations"] == a_before["observations"] + 1,
                   f"{a_before['observations']} -> {after['observations']}")
 
-            now = [p for p in after["name"] if p["id"] == target["id"]]
-            if now:
-                check(f"目标档案 #{target['id']} 的观察数 +1",
-                      now[0]["obs"] == target["obs"] + 1,
-                      f"{target['obs']} -> {now[0]['obs']}")
-                check("目标档案的照片数也增加了",
-                      now[0]["imgs"] > target["imgs"],
-                      f"{target['imgs']} -> {now[0]['imgs']}")
+            # 用「观察数变化」反推实际被并入的那一份（不预设目标）
+            before_map = {q['id']: (q['obs'], q['imgs']) for q in a_before['name']}
+            after_map = {q['id']: (q['obs'], q['imgs']) for q in after['name']}
+            bumped = [i for i, v in before_map.items()
+                      if i in after_map and after_map[i][0] == v[0] + 1]
+            check("恰好一份档案的观察数 +1（归并进了它）",
+                  len(bumped) == 1, f"观察数 +1 的档案：{bumped}")
+            # 也不许有档案观察数减少（那意味着覆盖或丢了数据）
+            odd = [i for i, v in before_map.items()
+                   if i in after_map and after_map[i][0] != v[0] and i not in bumped]
+            check("其它档案的观察数未变（没有误并/丢数据）",
+                  not odd, f"观察数异常的档案：{odd}")
+            if len(bumped) == 1:
+                pid = bumped[0]
+                b_obs, b_imgs = before_map[pid]
+                a_obs, a_imgs = after_map[pid]
+                print(f"    实际并入：#{pid}（观察 {b_obs}->{a_obs} / "
+                      f"照片 {b_imgs}->{a_imgs}）")
+                check("被归并档案的照片数也增加了",
+                      a_imgs > b_imgs, f"{b_imgs} -> {a_imgs}")
 
-            # 原有观察必须完整保留：观察数只增不减，且更早的那条还在
+            # 原有观察必须完整保留：观察数只增不减
             check("原有观察未被覆盖（观察数只增不减）",
                   after["observations"] > a_before["observations"])
             shot("p5-appended")
@@ -835,7 +956,10 @@ print("\n[D] 搜索命中中文名与拉丁学名（验收标准 ⑤）")
 if open_home_and_search():
     check("进入搜索页", True)
 
-    all_plants = refresh()["plants"]
+    # 界面上的「找到 N 株植物」数的是**在用**档案（不含回收站），
+    # 而 refresh()["plants"] 是全部行。有过删除之后两者不再相等 ——
+    # 这里按界面语义取数，并把界面上的数字解析出来比对（不靠格式巧合）。
+    all_plants = refresh()["active"]
 
     # ---- D1：拉丁学名（ASCII，adb 可以真实输入）
     ok, why = type_into_search("Lagerstroemia")
@@ -868,8 +992,11 @@ if open_home_and_search():
     check("清空关键词后恢复全部结果", ok, why)
     time.sleep(2.5)
     text = collect_all_text()
+    m_count = re.search(r"找到 (\d+) 株植物", text)
     check(f"清空后能看到全部 {all_plants} 株",
-          f"找到 {all_plants} 株植物" in text, text[:200])
+          bool(m_count) and int(m_count.group(1)) == all_plants,
+          f"界面显示 {m_count.group(1) if m_count else '(无计数)'}"
+          f" / 库中在用 {all_plants}")
 else:
     check("进入搜索页", False, "流程未走通")
 
@@ -896,13 +1023,14 @@ print(f"    中文名命中 {sql_result['by_name']} 行 / "
       f"拉丁名命中 {sql_result['by_latin']} 行 / 交集 {sql_result['same_rows']} 行")
 
 
-# ============================================================ [E] 删除植物
-print("\n[E] 删除植物 → 图片文件必须真的消失（报告 Part 4.7 主要风险）")
+# ============================================================ [E] 删除植物（软删 → 回收站）
+print("\n[E] 删除植物 → 先放进回收站：行 / 观察 / 照片都保留，可恢复")
 
 refresh()
 e_before = LAST_SNAPSHOT.copy()
 files_before = file_count()
-print(f"    起始：{e_before['plants']} 株 / 磁盘 {files_before} 个图片文件")
+print(f"    起始：在用 {e_before['active']} 株 / 全部行 {e_before['plants']} / "
+      f"磁盘 {files_before} 个图片文件")
 
 if not plants_named("紫薇"):
     check("找到可删除的档案", False, "库里没有同名档案")
@@ -911,44 +1039,45 @@ elif open_plant_detail(0):
 
     if tap("删除", exact=True, timeout=15):
         time.sleep(1.5)
-        dialog = collect_all_text()
-        check("删除前有二次确认", "无法撤销" in dialog, dialog[:300])
+        dialog = dialog_text()
+        # 文案随 Phase 3 改成「移入回收站」：删除是**软删**，照片与观察都留着，
+        # 用户能在回收站恢复。断言要跟着产品语义走而不是跟着旧文案 ——
+        # 旧脚本找的「无法撤销」是硬删时代的说法，早就对不上了。
+        check("删除前有二次确认",
+              "删除这份植物档案" in dialog or "移入回收站" in dialog, dialog[:300])
+        check("弹窗说明是「进回收站」而非直接销毁", "回收站" in dialog, dialog[:300])
 
-        # 确认按钮刻意与顶栏的「删除」不同名，避免点错
-        if tap("确认删除", exact=True, timeout=15):
+        # 确认按钮刻意不叫「删除」：顶栏那个也叫「删除」，
+        # 两个同名按钮同屏会让用户（和自动化脚本）点错。
+        if tap("移入回收站", exact=True, timeout=15):
             time.sleep(4)
             after = refresh()
 
-            # 不预设删掉的是哪一条 —— 首页列表按最近更新排序，
-            # 点开的是哪张卡并不确定。用 id 差集反推实际被删的档案，
-            # 再拿它的照片数去核对文件变化，这样与「点开哪张卡」无关
-            gone_ids = {p["id"] for p in e_before["name"]} - {p["id"] for p in after["name"]}
-            check("恰好删除了一份档案", len(gone_ids) == 1,
-                  f"消失了 {len(gone_ids)} 份：{gone_ids}")
-            check("档案总数 -1",
-                  after["plants"] == e_before["plants"] - 1,
+            # 用 deletedAt 反推**这一轮**新进回收站的档案 —— 不预设点开了哪张卡
+            before_deleted = {q["id"] for q in e_before["name"] if q.get("deleted")}
+            newly = [q["id"] for q in after["name"]
+                     if q.get("deleted") and q["id"] not in before_deleted]
+            check("恰好一份档案进入回收站", len(newly) == 1, f"新软删：{newly}")
+            check("在用档案数 -1", after["active"] == e_before["active"] - 1,
+                  f"{e_before['active']} -> {after['active']}")
+            check("行还在（软删而非硬删，回收站才恢复得回来）",
+                  after["plants"] == e_before["plants"],
                   f"{e_before['plants']} -> {after['plants']}")
 
-            if gone_ids:
-                gone = next(p for p in e_before["name"] if p["id"] in gone_ids)
-                print(f"    实际删除：#{gone['id']}（{gone['obs']} 次观察 / "
-                      f"{gone['imgs']} 张照片）")
-                # 观察行也要跟着走：档案没了但观察还在就是孤儿数据
-                check("该档案的观察行一并删除",
-                      after["observations"] == e_before["observations"] - gone["obs"],
-                      f"观察 {e_before['observations']} -> {after['observations']}，"
-                      f"该档案原有 {gone['obs']} 条")
+            if len(newly) == 1:
+                pid = newly[0]
+                gone = next(q for q in e_before["name"] if q["id"] == pid)
+                print(f"    实际删除：#{pid}（{gone['obs']} 次观察 / {gone['imgs']} 张照片）")
+                check("该档案的观察行保留（恢复后观察不能丢）",
+                      after["observations"] == e_before["observations"],
+                      f"观察 {e_before['observations']} -> {after['observations']}")
+                check("该档案的照片行保留",
+                      after["images"] == e_before["images"],
+                      f"照片 {e_before['images']} -> {after['images']}")
                 files_after = file_count()
-                check(
-                    f"图片文件真的被删掉（磁盘 {files_before} -> {files_after}，"
-                    f"该档案原有 {gone['imgs']} 张）",
-                    files_after <= files_before - 1,
-                    "磁盘文件数没有减少 —— 只删了数据库行，文件成了孤儿",
-                )
-                # 照片文件不应被删多：其它档案还引用着各自的照片
-                check("没有误删其它档案的照片",
-                      files_after >= files_before - gone["imgs"] - 1,
-                      f"少了 {files_before - files_after} 个，但该档案只有 {gone['imgs']} 张")
+                check("照片文件留在磁盘（回收站要能恢复）",
+                      files_after == files_before,
+                      f"磁盘 {files_before} -> {files_after}")
             shot("p5-after-delete")
         else:
             check("确认删除", False, "找不到确认按钮")

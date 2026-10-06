@@ -32,7 +32,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _env  # noqa: E402  —— tools/_env.py，统一解析本机环境
 
 ADB = _env.require_adb_or_exit()
-DEV = os.environ.get("ANDROID_SERIAL", "192.168.253.119:5555")
+DEV = _env.require_device_or_exit(ADB)
+#   —— 不写死地址：网络设备的 IP 每次重启都会变（见 _env.MISSING_DEVICE_HINT）；
+#      ANDROID_SERIAL 仍然优先，显式指定不会被覆盖
 OUT = os.environ.get(
     "DB_PULL_DIR",
     os.path.join(os.environ.get("TEMP", "/tmp"), "plant_identify_db"),
@@ -109,29 +111,42 @@ for p in plants:
     flag = "✅" if n_obs == 1 else f"⚠ {n_obs} 条观察"
     print(f"    #{pid} {p['name']:16} 观察 {n_obs} 条 / 照片 {n_img} 张  {flag}")
 
-# 只对「刚走完 P4 流程」的档案断言：找照片数最多的一条
-multi = [p for p in plants if q(
-    "SELECT COUNT(*) FROM observation_image oi "
-    "JOIN plant_observation o ON oi.observationId=o.id WHERE o.plantId=?", p["id"]
-)[0][0] > 1]
-
-if multi:
-    target = multi[0]
-    tid = target["id"]
-    n_obs = q("SELECT COUNT(*) FROM plant_observation WHERE plantId=?", tid)[0][0]
-    check(f"多图档案 #{tid}「{target['name']}」只有一条观察（补图未新建）", n_obs == 1,
-          f"{n_obs} 条")
-else:
-    print("    （库里暂无多图档案，跳过该断言）")
+# 「补图是否新建了观察」的正确验法：看**单次观察**能不能挂多张照片。
+# 旧写法是「找照片最多的档案、断言它只有 1 条观察」—— 那是个数据状态假设：
+# 该档案后来只要被「添加到已有植物」合并过几次，观察数就 >1，断言即误报
+# （实测 #3 被本轮测试合并到 6 条观察）。多图归一次观察这件事，
+# 直接查「有没有哪条观察挂着 ≥2 张照片」就够，与档案被合并过几次无关。
+multi_obs = q(
+    "SELECT o.id, COUNT(i.id) AS n FROM plant_observation o "
+    "JOIN observation_image i ON i.observationId = o.id "
+    "GROUP BY o.id HAVING COUNT(i.id) > 1 ORDER BY n DESC LIMIT 3"
+)
+check("多图存在同一次观察里（补图不会各建一条观察）", len(multi_obs) > 0,
+      f"挂 >=2 张照片的观察：{[(r[0], r[1]) for r in multi_obs]}"
+      if multi_obs else "没有任何观察挂 >=2 张照片")
 
 # 反向一致性：档案存在却没有观察，说明保存流程只写了一半
 no_obs = [p["id"] for p in plants
           if q("SELECT COUNT(*) FROM plant_observation WHERE plantId=?", p["id"])[0][0] == 0]
 check("每条档案至少有一条观察（不存在只写了一半的档案）", not no_obs, str(no_obs[:3]))
 
-no_img = [o["id"] for o in obs
-          if q("SELECT COUNT(*) FROM observation_image WHERE observationId=?", o["id"])[0][0] == 0]
-check("每条观察至少有一张照片", not no_img, str(no_img[:3]))
+no_img_plants = [p["id"] for p in plants
+                 if q("SELECT COUNT(*) FROM observation_image i "
+                      "JOIN plant_observation o ON o.id = i.observationId "
+                      "WHERE o.plantId = ?", p["id"])[0][0] == 0]
+check("每条档案至少有一张照片", not no_img_plants, str(no_img_plants[:3]))
+
+# 引用完整性：照片一定属于某次观察、观察一定属于某份档案。
+# 由外键级联保证，但这正是「删一半」最容易破坏的地方，值得每次验。
+orphan_img = q("SELECT COUNT(*) FROM observation_image i "
+               "LEFT JOIN plant_observation o ON o.id = i.observationId "
+               "WHERE o.id IS NULL")[0][0]
+check("没有孤儿照片行（照片一定属于某次观察）", orphan_img == 0, f"{orphan_img} 张")
+
+orphan_obs = q("SELECT COUNT(*) FROM plant_observation o "
+               "LEFT JOIN plant_record p ON p.id = o.plantId "
+               "WHERE p.id IS NULL")[0][0]
+check("没有孤儿观察行（观察一定属于某份档案）", orphan_obs == 0, f"{orphan_obs} 条")
 
 print("\n[3] 字段完整性")
 p = plants[-1]

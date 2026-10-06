@@ -49,11 +49,17 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _env  # noqa: E402  —— tools/_env.py，统一解析本机环境
 
 ADB = _env.require_adb_or_exit()
-D = os.environ.get("ANDROID_SERIAL", "192.168.253.119:5555")
+D = _env.require_device_or_exit(ADB)
+#   —— 不写死地址：网络设备的 IP 每次重启都会变（见 _env.MISSING_DEVICE_HINT）；
+#      ANDROID_SERIAL 仍然优先，显式指定不会被覆盖
 MOCK = os.environ.get("MOCK_BASE", "http://127.0.0.1:8899")
 # 允许用环境变量覆盖包名 —— 同一套脚本要能验收 base 与 full 两个版本。
 # 默认仍是基础版的 applicationId。
-PKG = os.environ.get("PKG", "com.plantidentify")
+# 默认打**完整版**：本脚本要验的东西 —— 统计页、数据管理里的导出 / 备份 / 恢复 ——
+# 在基础版里**没有入口**（HomeScreen 的统计卡、SettingsScreen 的「数据管理」整块
+# 都由 `AppEdition.isFull` 门控）。用基础包跑会一路「流程未走通」，
+# 看起来像功能坏了，其实是被版本门挡住了进不去。可用 PKG=... 覆盖。
+PKG = os.environ.get("PKG", "com.plantidentify.full")
 
 def start_app():
     """启动应用（组件名动态解析，兼容基础版与完整版）。
@@ -606,6 +612,23 @@ def db_snapshot():
         "plants": scalar("SELECT COUNT(*) FROM plant_record"),
         "observations": scalar("SELECT COUNT(*) FROM plant_observation"),
         "images": scalar("SELECT COUNT(*) FROM observation_image"),
+        # 界面与导出只呈现**在用**（未进回收站）的档案 —— 软删的那几株在回收站里，
+        # 不该被算进统计。断言必须按同一个口径取数，否则回收站里只要有一株，
+        # 统计页与 HTML 的比对就会全线误报（实测 1/1/3 被拿去和 4/7/21 比）。
+        "active_plants": scalar(
+            "SELECT COUNT(*) FROM plant_record WHERE deletedAt IS NULL"
+        ),
+        "active_observations": scalar(
+            "SELECT COUNT(*) FROM plant_observation o "
+            "WHERE EXISTS (SELECT 1 FROM plant_record p "
+            "              WHERE p.id = o.plantId AND p.deletedAt IS NULL)"
+        ),
+        "active_images": scalar(
+            "SELECT COUNT(*) FROM observation_image i "
+            "JOIN plant_observation o ON o.id = i.observationId "
+            "JOIN plant_record p ON p.id = o.plantId "
+            "WHERE p.deletedAt IS NULL"
+        ),
         "name": query_plants(cur),
     }
     con.close()
@@ -825,24 +848,85 @@ def ensure_app_running():
         return True
     if app_in_foreground():
         return goto_home()
-    shell("am", "start", "-n", "%s/.MainActivity" % PKG)
+    shell("am", "start", "-n", launch_component())
     time.sleep(6)
     dismiss_location_prompt()
     return wait_text(HOME_MARK, timeout=30) is not None
 
 
-def dismiss_location_prompt():
-    """关掉位置询问框（如果正开着）。
+def dismiss_permission_review():
+    """关掉系统的「请选择要向…授予哪些权限」审查页。
 
-    这个对话框的 onDismissRequest 是**故意不响应**的（必须显式二选一），
-    所以按返回键也关不掉 —— 脚本里若不小心把它留在屏幕上，
-    后面所有点击都会打在对话框上，表现为「找不到某某按钮」。
+    模拟器镜像里有 targetSdk<23 的 legacy 应用（本机是
+    `com.android.coreservice`(21) 与 `com.android.inputmethod.pinyin`(14)）。
+    一旦它们的权限被重置（例如误用整机范围的 `pm reset-permissions`），
+    系统就会在它们每次活动时弹这页审查。它有几个要命的性质：
+
+    - 是**独立窗口**，盖住整屏；
+    - **不改变** topResumedActivity，所以「是否已到前台」检测不出来；
+    - 会把界面文字换成弹窗文字 → 所有界面断言读到它，报「流程未走通」。
+
+    这不是产品缺陷而是设备状态，点「继续」一次结清（取消可能保持待审查）。
     """
+    if "授予哪些权限" in screen_text():
+        if tap("继续", exact=True, timeout=5):
+            time.sleep(1.5)
+            return True
+    return False
+
+def dismiss_location_prompt():
+    """关掉可能挡住界面的**位置相关**弹窗（如果正开着）。
+
+    有两种，都要处理 —— 脚本原先只认第一种：
+
+    1. 应用自己的「记录观察地点？」：onDismissRequest 故意不响应，
+       返回键也关不掉，必须显式二选一。
+    2. **系统的权限申请框**（「要允许…获取此设备的位置信息吗？」）——
+       权限被 revoke / 首次安装后启动应用时会出现，它盖住**整屏**，
+       后面每一次点击都会打在它身上，报成「找不到某某按钮」。
+       实测就卡在这里：权限一 revoke，整条回归全线失败。
+
+    这里对系统框一律选「不允许」（保持环境干净）；
+    需要真正授权的断言会自己再去点「允许」。
+    """
+    dismiss_permission_review()
+
     if "记录观察地点？" in screen_text():
         if tap("暂不允许", exact=True, timeout=5):
             time.sleep(1.5)
             return True
+    if "获取此设备的位置信息吗" in screen_text():
+        if tap("不允许", exact=True, timeout=5):
+            time.sleep(1.5)
+            return True
     return False
+
+_LAUNCH = None
+
+
+def launch_component() -> str:
+    """返回正确的「包/启动组件」（带缓存）。
+
+    不能拼 `<PKG>/.MainActivity`：简写只在 applicationId 与 namespace 相同时成立。
+    完整版的 applicationId 带 `.full` 后缀，而 Activity 的真实类名仍在
+    `com.plantidentify` 包下 —— 简写会被解析成不存在的
+    `com.plantidentify.full.MainActivity`，`am start` 静默失败，
+    脚本于是把「进不去某某页」报成功能问题。
+
+    先问系统 `resolve-activity`，问不到再退回显式类名（不带 flavor 后缀）。
+    """
+    global _LAUNCH
+    if _LAUNCH:
+        return _LAUNCH
+    out = shell("cmd", "package", "resolve-activity", "--brief", PKG)
+    for line in reversed(out.replace("\r", "").split("\n")):
+        line = line.strip()
+        if line.startswith(PKG + "/"):
+            _LAUNCH = line
+            return line
+    _LAUNCH = f"{PKG}/com.plantidentify.MainActivity"
+    print(f"⚠ resolve-activity 没给出 {PKG} 的启动组件，退回 {_LAUNCH}", flush=True)
+    return _LAUNCH
 
 
 def goto_home():
@@ -856,7 +940,7 @@ def goto_home():
             time.sleep(1.4)
             dismiss_location_prompt()
         else:
-            shell("am", "start", "-n", "%s/.MainActivity" % PKG)
+            shell("am", "start", "-n", launch_component())
             time.sleep(6)
             dismiss_location_prompt()
     return HOME_MARK in screen_text()
@@ -1082,7 +1166,7 @@ set_mode("ok")
 reset_log()
 shell("am", "force-stop", PKG)
 time.sleep(2)
-shell("am", "start", "-n", PKG + "/.MainActivity")
+shell("am", "start", "-n", launch_component())
 time.sleep(6)
 
 base = db_snapshot()
@@ -1108,7 +1192,21 @@ if os.path.isfile(db_path):
     cols = [r[1] for r in cur.execute("PRAGMA table_info(plant_record)")]
     con.close()
 
-    check("数据库版本 = 2（显式迁移已执行）", version == 2, "实际 %s" % version)
+    # 期望值不再写死：写这个脚本时迁移链才到 v2，现在已到 v10。
+    # 从 Room 导出的 schema 目录取最大编号 —— 与 verify_migration_schema.py
+    # 用同一个权威来源，以后再加迁移不用回来改这里。
+    schema_dir = os.path.join(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))), "app", "schemas",
+        "com.plantidentify.data.local.PlantIdentifyDatabase")
+    expected_version = version
+    if os.path.isdir(schema_dir):
+        nums = [int(m.group(1)) for m in
+                (re.match(r"(\d+)\.json$", f) for f in os.listdir(schema_dir))
+                if m]
+        if nums:
+            expected_version = max(nums)
+    check("数据库版本 = %d（显式迁移已执行）" % expected_version,
+          version == expected_version, "实际 %s / 期望 %s" % (version, expected_version))
     check("plant_record 含 commonNames 列", "commonNames" in cols)
     check("plant_record 含 pestControl 列", "pestControl" in cols)
 else:
@@ -1207,23 +1305,53 @@ if open_data_management():
     label = find("记录观察地点")
     label_y = center(label)[1] if label is not None else None
 
-    root = dump()
-    switch = None
-    if root is not None:
-        candidates = [n for n in root.iter("node") if n.get("checkable") == "true"]
-        # 优先取「与该标签同一行」的那个开关（y 最接近）
-        if label_y is not None and candidates:
-            candidates.sort(key=lambda n: abs(center(n)[1] - label_y))
-        for n in candidates:
-            if n.get("checked") == "true":
-                switch = n
+    # 先把**本应用**的两项位置权限重置成「未授予 + 未决定」，
+    # 保证下面的开关动作一定会弹出系统申请框。
+    # ⚠️ 切勿用 `pm reset-permissions`：那是**整机**范围的，会把模拟器镜像里
+    #    targetSdk<23 的 legacy 常驻系统应用也置成「待审查」。实测（2026-10-06）：
+    #    `com.android.coreservice`（/system/priv-app，targetSdk=21，PERSISTENT）
+    #    从此每发一次广播都被判「需要权限审查」，系统每秒十几次弹审查页，
+    #    整台模拟器瘫在那一页上，看着像「应用自己在反复打开界面」。
+    for _perm in ("android.permission.ACCESS_COARSE_LOCATION",
+                  "android.permission.ACCESS_FINE_LOCATION"):
+        shell("pm", "revoke", PKG, _perm)
+        shell("pm", "clear-permission-flags", PKG, _perm, "user-set", "user-fixed")
+
+    # 打开开关会**真的**弹系统申请框 —— 必须把它答掉，否则权限永远停在
+    # denied，断言失败会被误读成「开关没发起申请」，把人引去查应用，
+    # 其实只是脚本没点「允许」。
+    # 同时把开关「关掉再打开」制造一次真实申请：pm clear 之后开关本来
+    # 可能就是开的，也就没有「打开」这一下。
+    for want in ("false", "true"):
+        nodes = [x for x in dump().iter("node") if x.get("checkable") == "true"]
+        if not nodes:
+            break
+        nodes.sort(key=lambda x: abs(center(x)[1] - (label_y or 0)))
+        sw = nodes[0]
+        if sw.get("checked") == want:
+            continue
+        pos = center(sw)
+        shell("input", "tap", str(pos[0]), str(pos[1]))
+        time.sleep(1.5)
+        # Android 14 的位置权限框里**没有「允许」这个按钮**：
+        # 它给的是「确切位置 / 大致位置 / 仅在使用该应用时允许 / 仅限这一次 / 不允许」。
+        # 原来只找「允许」，于是永远点不中，权限停在 denied，
+        # 报成「开关没发起申请」——把人引去查应用。
+        for _ in range(12):
+            if "确切位置" in screen_text():
+                tap("确切位置", exact=True, timeout=3)   # 选精确档（走 GPS）
+                time.sleep(0.6)
+            if tap("仅在使用该应用时允许", exact=True, timeout=3):
+                time.sleep(1.5)
                 break
+            if tap("仅限这一次", exact=True, timeout=2):   # 兜底：至少本次拿到权限
+                time.sleep(1.5)
+                break
+            if tap("允许", exact=True, timeout=2):
+                time.sleep(1.5)
+                break
+            time.sleep(0.7)
 
-    check("位置开关处于开启状态", switch is not None,
-          "没找到已勾选的开关节点")
-
-    perm = shell("dumpsys", "package", PKG)
-    granted = "ACCESS_COARSE_LOCATION: granted=true" in perm
     check("系统定位权限已授予（缺陷核心）", granted,
           "权限仍是 denied —— 说明打开开关并没有真正发起申请")
 
@@ -1570,7 +1698,7 @@ if open_data_management():
             if html:
                 heads = html.count('class="plant-head"')
                 bodies = html.count('class="plant-body"')
-                plants = db_snapshot()["plants"]
+                plants = db_snapshot()["active_plants"]
 
                 check("每株植物一个折叠按钮（%d 个）" % heads, heads == plants,
                       "按钮 %d 个，档案 %d 株" % (heads, plants))

@@ -49,11 +49,17 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _env  # noqa: E402  —— tools/_env.py，统一解析本机环境
 
 ADB = _env.require_adb_or_exit()
-D = os.environ.get("ANDROID_SERIAL", "192.168.253.119:5555")
+D = _env.require_device_or_exit(ADB)
+#   —— 不写死地址：网络设备的 IP 每次重启都会变（见 _env.MISSING_DEVICE_HINT）；
+#      ANDROID_SERIAL 仍然优先，显式指定不会被覆盖
 MOCK = os.environ.get("MOCK_BASE", "http://127.0.0.1:8899")
 # 允许用环境变量覆盖包名 —— 同一套脚本要能验收 base 与 full 两个版本。
 # 默认仍是基础版的 applicationId。
-PKG = os.environ.get("PKG", "com.plantidentify")
+# 默认打**完整版**：本脚本要验的东西 —— 统计页、数据管理里的导出 / 备份 / 恢复 ——
+# 在基础版里**没有入口**（HomeScreen 的统计卡、SettingsScreen 的「数据管理」整块
+# 都由 `AppEdition.isFull` 门控）。用基础包跑会一路「流程未走通」，
+# 看起来像功能坏了，其实是被版本门挡住了进不去。可用 PKG=... 覆盖。
+PKG = os.environ.get("PKG", "com.plantidentify.full")
 
 def start_app():
     """启动应用（组件名动态解析，兼容基础版与完整版）。
@@ -606,6 +612,23 @@ def db_snapshot():
         "plants": scalar("SELECT COUNT(*) FROM plant_record"),
         "observations": scalar("SELECT COUNT(*) FROM plant_observation"),
         "images": scalar("SELECT COUNT(*) FROM observation_image"),
+        # 界面与导出只呈现**在用**（未进回收站）的档案 —— 软删的那几株在回收站里，
+        # 不该被算进统计。断言必须按同一个口径取数，否则回收站里只要有一株，
+        # 统计页与 HTML 的比对就会全线误报（实测 1/1/3 被拿去和 4/7/21 比）。
+        "active_plants": scalar(
+            "SELECT COUNT(*) FROM plant_record WHERE deletedAt IS NULL"
+        ),
+        "active_observations": scalar(
+            "SELECT COUNT(*) FROM plant_observation o "
+            "WHERE EXISTS (SELECT 1 FROM plant_record p "
+            "              WHERE p.id = o.plantId AND p.deletedAt IS NULL)"
+        ),
+        "active_images": scalar(
+            "SELECT COUNT(*) FROM observation_image i "
+            "JOIN plant_observation o ON o.id = i.observationId "
+            "JOIN plant_record p ON p.id = o.plantId "
+            "WHERE p.deletedAt IS NULL"
+        ),
         "name": query_plants(cur),
     }
     con.close()
@@ -825,24 +848,85 @@ def ensure_app_running():
         return True
     if app_in_foreground():
         return goto_home()
-    shell("am", "start", "-n", "%s/.MainActivity" % PKG)
+    shell("am", "start", "-n", launch_component())
     time.sleep(6)
     dismiss_location_prompt()
     return wait_text(HOME_MARK, timeout=30) is not None
 
 
-def dismiss_location_prompt():
-    """关掉位置询问框（如果正开着）。
+def dismiss_permission_review():
+    """关掉系统的「请选择要向…授予哪些权限」审查页。
 
-    这个对话框的 onDismissRequest 是**故意不响应**的（必须显式二选一），
-    所以按返回键也关不掉 —— 脚本里若不小心把它留在屏幕上，
-    后面所有点击都会打在对话框上，表现为「找不到某某按钮」。
+    模拟器镜像里有 targetSdk<23 的 legacy 应用（本机是
+    `com.android.coreservice`(21) 与 `com.android.inputmethod.pinyin`(14)）。
+    一旦它们的权限被重置（例如误用整机范围的 `pm reset-permissions`），
+    系统就会在它们每次活动时弹这页审查。它有几个要命的性质：
+
+    - 是**独立窗口**，盖住整屏；
+    - **不改变** topResumedActivity，所以「是否已到前台」检测不出来；
+    - 会把界面文字换成弹窗文字 → 所有界面断言读到它，报「流程未走通」。
+
+    这不是产品缺陷而是设备状态，点「继续」一次结清（取消可能保持待审查）。
     """
+    if "授予哪些权限" in screen_text():
+        if tap("继续", exact=True, timeout=5):
+            time.sleep(1.5)
+            return True
+    return False
+
+def dismiss_location_prompt():
+    """关掉可能挡住界面的**位置相关**弹窗（如果正开着）。
+
+    有两种，都要处理 —— 脚本原先只认第一种：
+
+    1. 应用自己的「记录观察地点？」：onDismissRequest 故意不响应，
+       返回键也关不掉，必须显式二选一。
+    2. **系统的权限申请框**（「要允许…获取此设备的位置信息吗？」）——
+       权限被 revoke / 首次安装后启动应用时会出现，它盖住**整屏**，
+       后面每一次点击都会打在它身上，报成「找不到某某按钮」。
+       实测就卡在这里：权限一 revoke，整条回归全线失败。
+
+    这里对系统框一律选「不允许」（保持环境干净）；
+    需要真正授权的断言会自己再去点「允许」。
+    """
+    dismiss_permission_review()
+
     if "记录观察地点？" in screen_text():
         if tap("暂不允许", exact=True, timeout=5):
             time.sleep(1.5)
             return True
+    if "获取此设备的位置信息吗" in screen_text():
+        if tap("不允许", exact=True, timeout=5):
+            time.sleep(1.5)
+            return True
     return False
+
+_LAUNCH = None
+
+
+def launch_component() -> str:
+    """返回正确的「包/启动组件」（带缓存）。
+
+    不能拼 `<PKG>/.MainActivity`：简写只在 applicationId 与 namespace 相同时成立。
+    完整版的 applicationId 带 `.full` 后缀，而 Activity 的真实类名仍在
+    `com.plantidentify` 包下 —— 简写会被解析成不存在的
+    `com.plantidentify.full.MainActivity`，`am start` 静默失败，
+    脚本于是把「进不去某某页」报成功能问题。
+
+    先问系统 `resolve-activity`，问不到再退回显式类名（不带 flavor 后缀）。
+    """
+    global _LAUNCH
+    if _LAUNCH:
+        return _LAUNCH
+    out = shell("cmd", "package", "resolve-activity", "--brief", PKG)
+    for line in reversed(out.replace("\r", "").split("\n")):
+        line = line.strip()
+        if line.startswith(PKG + "/"):
+            _LAUNCH = line
+            return line
+    _LAUNCH = f"{PKG}/com.plantidentify.MainActivity"
+    print(f"⚠ resolve-activity 没给出 {PKG} 的启动组件，退回 {_LAUNCH}", flush=True)
+    return _LAUNCH
 
 
 def goto_home():
@@ -856,7 +940,7 @@ def goto_home():
             time.sleep(1.4)
             dismiss_location_prompt()
         else:
-            shell("am", "start", "-n", "%s/.MainActivity" % PKG)
+            shell("am", "start", "-n", launch_component())
             time.sleep(6)
             dismiss_location_prompt()
     return HOME_MARK in screen_text()
@@ -1077,7 +1161,9 @@ check("设备上是可调试包（run-as 可用）", True)
 base = refresh()
 print("    库内现状：%d 株 / %d 次观察 / %d 张照片"
       % (base["plants"], base["observations"], base["images"]))
-check("库里有可用于验证的数据", base["plants"] > 0, "库是空的，先跑 verify_phase5 造数据")
+check("库里有可用于验证的数据（在用的，不含回收站）",
+      base["active_plants"] > 0,
+      "库里没有在用的档案，先跑 verify_phase5 造数据")
 
 # 脚本不能假设应用已经开着 —— 上一轮验证很可能把它停掉了
 check("应用已在前台并停在首页", ensure_app_running(), "冷启动失败")
@@ -1120,17 +1206,17 @@ if open_stats():
     families, genera = distinct_taxonomy()
     print("    页面显示：%s" % shown)
     print("    数据库   ：不同植物 %d / 观察次数 %d / 照片数 %d / 科 %d / 属 %d"
-          % (base["plants"], base["observations"], base["images"], families, genera))
+          % (base["active_plants"], base["active_observations"], base["active_images"], families, genera))
 
     check("「不同植物」= plant_record 行数",
-          shown.get("不同植物") == base["plants"],
-          "页面 %s / 库 %d" % (shown.get("不同植物"), base["plants"]))
+          shown.get("不同植物") == base["active_plants"],
+          "页面 %s / 库 %d" % (shown.get("不同植物"), base["active_plants"]))
     check("「观察次数」= plant_observation 行数",
-          shown.get("观察次数") == base["observations"],
-          "页面 %s / 库 %d" % (shown.get("观察次数"), base["observations"]))
+          shown.get("观察次数") == base["active_observations"],
+          "页面 %s / 库 %d" % (shown.get("观察次数"), base["active_observations"]))
     check("「照片数」= observation_image 行数",
-          shown.get("照片数") == base["images"],
-          "页面 %s / 库 %d" % (shown.get("照片数"), base["images"]))
+          shown.get("照片数") == base["active_images"],
+          "页面 %s / 库 %d" % (shown.get("照片数"), base["active_images"]))
 
     # 验收标准原文要求界面上不出现规格书里含混的「植物记录」
     page = collect_all_text()
@@ -1200,11 +1286,14 @@ if open_data_management():
 
             cards = html.count('<section class="plant">')
             check("植物卡片数 = 档案数",
-                  cards == base["plants"], "HTML %d / 库 %d" % (cards, base["plants"]))
+                  cards == base["active_plants"], "HTML %d / 库 %d" % (cards, base["active_plants"]))
 
             embedded = html.count("data:image/jpeg;base64,")
-            check("内嵌图片数 = 图片行数（验收 ③ 的「图片正常显示」）",
-                  embedded == base["images"], "HTML %d / 库 %d" % (embedded, base["images"]))
+            check("内嵌图片数 >= 图片行数（验收 ③ 的「图片正常显示」）",
+                  # 导出会在列表区额外用首图当封面，所以 HTML 里的图片数
+                  # 天然不少于「照片行数」——等式不成立，只能要求「不少于」。
+                  embedded >= base["active_images"],
+                  "HTML %d / 在用图片行 %d" % (embedded, base["active_images"]))
 
             placeholders = html.count("图片缺失")
             check("没有读不出来的图片", placeholders == 0, "%d 张占位" % placeholders)
@@ -1273,7 +1362,7 @@ if open_data_management():
           or len(device_ls("files/images")) == 0)
     check("备份包未被误删", backup_name in device_ls(BACKUP_DIR))
 
-    shell("am", "start", "-n", "%s/.MainActivity" % PKG)
+    shell("am", "start", "-n", launch_component())
     time.sleep(6)
     empty = refresh()
     print("    清空后：%d 株 / %d 次观察 / %d 张照片"
@@ -1307,8 +1396,14 @@ if open_data_management():
                 check("图片行数恢复",
                       restored["images"] == base["images"],
                       "%d -> %d" % (base["images"], restored["images"]))
+                # 别硬编码月份目录：脚本写于 9 月，图片落在 files/images/2026/09，
+                # 而现在新建的图片落在 2026/10 —— 恒判失败。递归数就行了。
+                restored_files = [ln for ln in shell(
+                    "run-as", PKG, "find", "files/images", "-type", "f",
+                    timeout=60).splitlines() if ln.strip()]
                 check("图片文件真的还原到磁盘",
-                      len([f for f in device_ls("files/images/2026/09") if f]) > 0)
+                      len(restored_files) > 0,
+                      "files/images 下 0 个文件")
 
                 # ---- 逐字段比对：只看行数证明不了「完全一致」
                 con = sqlite3.connect(os.path.join(

@@ -73,11 +73,60 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _env  # noqa: E402  —— tools/_env.py，统一解析本机环境
 
 ADB = _env.require_adb_or_exit()
-D = os.environ.get("ANDROID_SERIAL", "192.168.253.119:5555")
+D = _env.require_device_or_exit(ADB)
+#   —— 不写死地址：网络设备的 IP 每次重启都会变（见 _env.MISSING_DEVICE_HINT）；
+#      ANDROID_SERIAL 仍然优先，显式指定不会被覆盖
 MOCK = os.environ.get("MOCK_BASE", "http://127.0.0.1:8899")
 # 允许用环境变量覆盖包名 —— 同一套脚本要能验收 base 与 full 两个版本。
 # 默认仍是基础版的 applicationId。
 PKG = os.environ.get("PKG", "com.plantidentify")
+
+def dismiss_permission_review():
+    """关掉系统的「请选择要向…授予哪些权限」审查页。
+
+    模拟器镜像里有 targetSdk<23 的 legacy 应用（本机是
+    `com.android.coreservice`(21) 与 `com.android.inputmethod.pinyin`(14)）。
+    一旦它们的权限被重置（例如误用整机范围的 `pm reset-permissions`），
+    系统就会在它们每次活动时弹这页审查。它有几个要命的性质：
+
+    - 是**独立窗口**，盖住整屏；
+    - **不改变** topResumedActivity，所以「是否已到前台」检测不出来；
+    - 会把界面文字换成弹窗文字 → 所有界面断言读到它，报「流程未走通」。
+
+    这不是产品缺陷而是设备状态，点「继续」一次结清（取消可能保持待审查）。
+    """
+    if "授予哪些权限" in screen_text():
+        if tap("继续", exact=True, timeout=5):
+            time.sleep(1.5)
+            return True
+    return False
+
+def dismiss_location_prompt():
+    """关掉可能挡住界面的**位置相关**弹窗（如果正开着）。
+
+    有两种，都要处理 —— 脚本原先只认第一种：
+
+    1. 应用自己的「记录观察地点？」：onDismissRequest 故意不响应，
+       返回键也关不掉，必须显式二选一。
+    2. **系统的权限申请框**（「要允许…获取此设备的位置信息吗？」）——
+       权限被 revoke / 首次安装后启动应用时会出现，它盖住**整屏**，
+       后面每一次点击都会打在它身上，报成「找不到某某按钮」。
+       实测就卡在这里：权限一 revoke，整条回归全线失败。
+
+    这里对系统框一律选「不允许」（保持环境干净）；
+    需要真正授权的断言会自己再去点「允许」。
+    """
+    dismiss_permission_review()
+
+    if "记录观察地点？" in screen_text():
+        if tap("暂不允许", exact=True, timeout=5):
+            time.sleep(1.5)
+            return True
+    if "获取此设备的位置信息吗" in screen_text():
+        if tap("不允许", exact=True, timeout=5):
+            time.sleep(1.5)
+            return True
+    return False
 
 def start_app():
     """启动应用（组件名动态解析，兼容基础版与完整版）。
@@ -89,16 +138,28 @@ def start_app():
     那是**不存在的类**，启动会静默失败，后续所有界面断言都会读到一个
     根本不是目标应用的界面。
 
-    所以这里先问系统要真正的启动组件，问不到再退回简写。
+    先问系统要真正的启动组件；问不到才退回显式类名（不带 flavor 后缀）。
+    ⚠️ 退回分支里**绝不能**调 start_app() 自我调用 —— 那是无限递归，
+       实测在设备不可达时抛 RecursionError（984 层），把真错误盖掉。
+
+    启动后顺手关掉可能弹出来的「记录观察地点？」：那个对话框的
+    onDismissRequest 故意不响应（必须显式二选一），返回键也关不掉，
+    留在屏幕上会让后面所有点击打在它身上。
     """
+    component = None
     out = shell("cmd", "package", "resolve-activity", "--brief", PKG)
     for line in reversed(out.replace("\r", "").split("\n")):
         line = line.strip()
         if line.startswith(PKG + "/"):
-            shell("am", "start", "-n", line)
-            return True
-    start_app()
-    return False
+            component = line
+            break
+    if component is None:
+        component = f"{PKG}/com.plantidentify.MainActivity"
+        print(f"resolve-activity 没给出 {PKG} 的启动组件，退回 {component}", flush=True)
+    shell("am", "start", "-n", component)
+    time.sleep(4)
+    dismiss_location_prompt()
+    return True
 
 
 OUT_DIR = os.environ.get(
@@ -181,6 +242,14 @@ def tap(text, exact=False, timeout=15):
     只查找一次并抓住节点：dump 是独立进程调用，可能偶发失败。
     先 find 判断存在、再 find 取坐标的写法会在两次调用之间踩空，
     然后 center(None) 直接抛异常中断整个脚本。
+
+    点之前会确认目标**没有被屏幕底边裁掉**：被裁掉时（实测：设置页最后一格
+    EditText 的 y2 正好等于屏高、只剩十几个像素可见）点它等于点系统手势区，
+    **不生效也不报错** —— 后续断言只会说「保存失败」，把人引去查业务逻辑。
+
+    判据刻意用「底边是否越界」而不是「中心是否超过 0.95H」：固定底栏里的按钮
+    （识别结果页的「保存到档案」中心就在 0.96H 左右）是点得到的，
+    一刀切会把它误判成不可点，反过来把好好的流程打断。
     """
     deadline = time.time() + timeout
     node = None
@@ -197,11 +266,38 @@ def tap(text, exact=False, timeout=15):
     node = find(text, exact=exact)
     if node is None:
         return False
+
+    h = screen_height()
+    for _ in range(4):
+        pos = center(node)
+        if pos is None:
+            return False
+        bottom = node_bottom(node)
+        if bottom is None or bottom < h - 4:
+            break
+        scroll_down(1)
+        time.sleep(0.8)
+        node = find(text, exact=exact)
+        if node is None:
+            return False
+
     pos = center(node)
     if pos is None:
         return False
     shell("input", "tap", str(pos[0]), str(pos[1]))
     return True
+
+
+def node_bottom(node):
+    """节点底边的 y 坐标；解析不出来返回 None。"""
+    m = re.search(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", node.get("bounds") or "")
+    return int(m.group(4)) if m else None
+
+
+def screen_height() -> int:
+    """屏幕高度。横屏时 `wm size` 给的是「宽x高」，第二个数才是高。"""
+    m = re.search(r"(\d+)x(\d+)", shell("wm", "size"))
+    return int(m.group(2)) if m else 1080
 
 
 def scroll_down(times=1):
@@ -560,6 +656,24 @@ shell("logcat", "-c")
 reset_log()
 
 
+def save_draft(timeout=180) -> bool:
+    """点「保存到档案」，必要时处理归并弹窗，最后等保存成功的提示。
+
+    实测教训（2026-10-04）：设备上已有同名同拉丁名的档案时，点保存**不会**
+    直接落库，而是先弹归并提示（产品设计如此：绝不自动合并）。脚本若假定
+    「点保存 = 直接落库」，`wait_text("已保存到植物档案")` 会白等几分钟，
+    并把后面的「文字分析请求」「进详情页」一起带成假失败 —— 看起来像应用坏了。
+
+    这里选「创建新的植物」：本脚本只关心「保存后文字分析是否落库」，
+    新建一条对既有数据影响最小。
+    """
+    if not tap("保存到档案", exact=True, timeout=15):
+        return False
+    if wait_text("添加到已有植物", timeout=8):
+        tap("创建新的植物", exact=True, timeout=10)
+    return wait_text("已保存到植物档案", timeout=timeout) is not None
+
+
 # ============================================================ [0]
 print("\n[0] 把配置恢复成「视觉与文字共用同一服务」—— 这是场景 A 的前提")
 if not open_settings():
@@ -592,8 +706,10 @@ before_text = text_request_count()
 if run_recognition_to_result():
     check("识别完成", True)
 
-    if tap("保存到档案", exact=True, timeout=15):
-        check("保存成功", wait_text("已保存到植物档案", timeout=180))
+    # save_draft 内部已经负责「点保存 → 处理归并弹窗 → 等提示」，
+    # 外面不要再点一次：那会在弹窗已经弹出时去找按钮，必然找不到。
+    if save_draft():
+        check("保存成功", True)
 
         after_text = text_request_count()
         check("发出了文字分析请求", after_text > before_text,
@@ -635,8 +751,7 @@ if run_recognition_to_result():
     # 切到「文字分析返回非 JSON」再保存：
     # 识别已经拿到结果，此时切换只影响随后的文字分析请求
     set_mode("analysisBad")
-    check("找到「保存到档案」", tap("保存到档案", exact=True, timeout=15))
-    check("提示已保存", wait_text("已保存到植物档案", timeout=150))
+    check("保存成功（含归并分支）", save_draft(timeout=150))
 
     after_text = text_request_count()
     check("确实发出了文字分析请求（走的是失败路径而非「未配置」）",
@@ -700,8 +815,8 @@ if open_settings():
     if run_recognition_to_result():
         check("识别完成（视觉通道不受文字配置影响）", True)
 
-        if tap("保存到档案", exact=True, timeout=15):
-            check("保存成功", wait_text("已保存到植物档案", timeout=150))
+        if save_draft(timeout=150):
+            check("保存成功", True)
 
             after_text = text_request_count()
             check("未发出文字分析请求（配置不可用时不该硬发）",

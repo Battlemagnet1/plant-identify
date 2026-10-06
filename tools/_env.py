@@ -30,6 +30,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import subprocess
 import sys
 
 IS_WINDOWS = os.name == "nt"
@@ -46,6 +47,15 @@ MISSING_SDK_HINT = (
     "找不到 Android SDK。任选一种：\n"
     "  1) 设置环境变量 ANDROID_HOME\n"
     "  2) 在仓库根 local.properties 写 sdk.dir=<你的 Android SDK 路径>"
+)
+
+MISSING_DEVICE_HINT = (
+    "没有找到可用的设备（adb devices 里没有状态为 device 的条目）。\n"
+    "  1) 模拟器：先把它启动起来；USB 真实设备：打开 USB 调试并允许这台电脑\n"
+    "  2) 网络连接的设备：adb connect <ip>:<port>\n"
+    "     ⚠️ 这类设备的 IP **每次重启都会变**，别去翻上次那个地址\n"
+    "  3) 也可以显式指定：环境变量 ANDROID_SERIAL=<ip>:<port>\n"
+    "当前 adb devices 看到的是："
 )
 
 
@@ -174,3 +184,64 @@ def require_adb_or_exit(repo: str | None = None) -> str:
         print("❌ " + MISSING_ADB_HINT, file=sys.stderr)
         sys.exit(1)
     return adb
+
+
+def list_devices(adb: str, timeout: int = 30) -> tuple[list[str], list[str]]:
+    """跑一次 `adb devices`，返回 (在线序列号, 非在线条目)。
+
+    非在线的一并返回，是因为「一个设备都没有」和「有设备但 offline/unauthorized」
+    需要完全不同的提示：后者要用户去设备上点授权弹窗，而前者要他把设备开起来。
+    混成一句「没找到设备」会让人白折腾很久。
+    """
+    try:
+        out = subprocess.run(
+            [adb, "devices"], capture_output=True, text=True, timeout=timeout
+        ).stdout
+    except Exception:
+        return [], []
+
+    online: list[str] = []
+    other: list[str] = []
+    for line in out.splitlines()[1:]:
+        line = line.strip()
+        if not line or line.startswith("*"):
+            continue
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        serial, state = parts[0], parts[1]
+        if state == "device":
+            online.append(serial)
+        else:
+            other.append(f"{serial}  [{state}]")
+    return online, other
+
+
+def find_device(adb: str) -> str | None:
+    """返回设备序列号；没有可用设备时返回 None。
+
+    优先级：**显式 ANDROID_SERIAL 永远赢**（调用方或用户明确指定的东西不该被猜），
+    否则取 `adb devices` 里第一个在线设备。
+
+    这里刻意**不提供任何写死的默认地址**。网络连接的模拟器（adb connect <ip>:<port>）
+    IP 每次重启都会变，写一个「上次那个」等于给自己埋一个必然失败的默认值，
+    而且报错会发生在很远的地方（表现为「设备不可达」）—— 这正是本模块存在的理由。
+    """
+    explicit = (os.environ.get("ANDROID_SERIAL") or "").strip()
+    if explicit:
+        return explicit
+    online, _ = list_devices(adb)
+    return online[0] if online else None
+
+
+def require_device_or_exit(adb: str, repo: str | None = None) -> str:
+    """成功返回设备序列号；失败打印可选做法并以 1 退出。"""
+    device = find_device(adb)
+    if device:
+        return device
+
+    _, other = list_devices(adb)
+    listing = "\n".join("    - " + s for s in other) if other else "    （列表为空）"
+    print("❌ " + MISSING_DEVICE_HINT + "\n" + listing, file=sys.stderr)
+    print("    （提示：每台设备的 IP 会变，用 adb devices 现取一次）", file=sys.stderr)
+    sys.exit(1)
