@@ -157,6 +157,43 @@ def screen_text():
     return "\n".join(ntext(n) for n in root.iter("node") if ntext(n))
 
 
+def perm_granted(perm):
+    """读取 <PKG> 的某项运行时权限**在系统里**是否已授予。
+
+    注意：不能用「开关是勾选的」代替 —— 开关的 checked 来自应用自己的
+    prefs，跟系统权限是两回事，`pm revoke` 之后开关照样可能是开的。
+    必须问系统。
+
+    用 `pm check-permission`（= `cmd package check-permission`，API 30+）。
+    不同 ROM 回的措辞不一样，有 "granted" / "denied" / 整句话三种。
+    判断顺序必须是「先 denied 再 granted」——否则 "not granted" 里的
+    "granted" 会让失败被判成成功。
+    """
+    for cmd in (("pm", "check-permission", PKG, perm),
+                ("cmd", "package", "check-permission", PKG, perm)):
+        try:
+            out = shell(*cmd).strip()
+        except Exception:
+            continue
+        if not out:
+            continue
+        low = out.lower()
+        if "denied" in low:
+            return False
+        if "granted" in low:
+            return True
+    # 兜底：某些版本 check-permission 不存在，退回 dumpsys 逐行找
+    #   "android.permission.ACCESS_FINE_LOCATION: granted=true"
+    try:
+        d = shell("dumpsys", "package", PKG, timeout=90)
+        for line in d.splitlines():
+            if perm in line and "granted=" in line:
+                return "granted=true" in line
+    except Exception:
+        pass
+    return False
+
+
 def tap(text, exact=False, timeout=15):
     """点击。默认精确匹配 —— 模糊匹配会撞上段落说明文字。
 
@@ -1352,6 +1389,11 @@ if open_data_management():
                 break
             time.sleep(0.7)
 
+    # 只在**循环点完之后**读系统状态：授予发生在点「仅在使用该应用时允许」那一刻。
+    _fine = perm_granted("android.permission.ACCESS_FINE_LOCATION")
+    _coarse = perm_granted("android.permission.ACCESS_COARSE_LOCATION")
+    granted = _fine or _coarse
+    print("    系统权限：FINE=%s  COARSE=%s" % (_fine, _coarse))
     check("系统定位权限已授予（缺陷核心）", granted,
           "权限仍是 denied —— 说明打开开关并没有真正发起申请")
 
