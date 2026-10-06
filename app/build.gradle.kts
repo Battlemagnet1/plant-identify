@@ -83,8 +83,10 @@ android {
             buildConfigField("boolean", "FULL_EDITION", "false")
 
             // 本地构建保留已发布的版本号；CI 会注入日期版本号。
-            versionCode = ciVersionCode ?: 1
-            versionName = ciVersionName ?: "1.0.0"
+            // v1.0.0 发的是 1，v1.0.2 必须**大于上一版**（1 → 2），
+            // 否则已装 v1.0.0 的设备「安装成功但跑的还是旧版本」。
+            versionCode = ciVersionCode ?: 2
+            versionName = ciVersionName ?: "1.0.2"
         }
         create("full") {
             dimension = "edition"
