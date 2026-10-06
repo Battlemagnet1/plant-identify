@@ -62,22 +62,63 @@ if "--edition" in _argv:
     EDITION = _argv[_i + 1]
     del _argv[_i:_i + 2]
 
-# 每个版本的 (包名, 显示名, versionName, versionCode)。
+# 每个版本的 (包名, 显示名)。
 #
-# versionName 曾经是**全局**的一个常量（那时两个包共用 1.0.0）。
-# 现在版本号按 flavor 各自递增（完整版加了功能就跳，基础版没加就不跳），
-# 它就必须跟着 edition 走 —— 写死成全局常量会让自检在基础版上永远失败，
-# 或者更糟：永远通过一个错误的期望值。
+# versionName / versionCode **刻意不写在这里**。它们唯一的真源是
+# app/build.gradle.kts 的两个 flavor 块；在这里再抄一份，就一定会过期。
+# 2026-10-06 v1.0.2 发版时正是如此：包已经是 1.0.2 / code 2，脚本还期望
+# 1.0.0 / 1，自检挂掉两项 —— 而包完全正确。这种误报比漏报更贵，
+# 它会让人去查一个根本不存在的构建问题。
 EDITIONS = {
-    "base": ("com.plantidentify", "Plant Identify Library", "1.0.0", "1"),
-    "full": ("com.plantidentify.full", "Plant Identify Library（完整版）", "1.0.2", "3"),
+    "base": ("com.plantidentify", "Plant Identify Library"),
+    "full": ("com.plantidentify.full", "Plant Identify Library（完整版）"),
 }
 if EDITION not in EDITIONS:
     print(f"未知版本 {EDITION}，可选：{', '.join(EDITIONS)}", file=sys.stderr)
     sys.exit(2)
 
-# 与 app/build.gradle.kts 的两个 flavor 块保持一致
-EXPECT_PACKAGE, EXPECT_LABEL, EXPECT_VERSION_NAME, EXPECT_VERSION_CODE = EDITIONS[EDITION]
+
+def _gradle_flavor_version(flavor: str):
+    """从 app/build.gradle.kts 的 create("<flavor>") 块解析本地版本号默认值。
+
+    块内形如：
+        versionCode = ciVersionCode ?: 2
+        versionName = ciVersionName ?: "1.0.2"
+
+    CI 构建会注入日期版本号（ciVersionCode/ciVersionName 非空），但
+    **正式发布包永远走 `?:` 后面这条本地默认值**（发版是手动
+    assembleRelease，不经过 CI 注入）。
+    """
+    kts = os.path.join(REPO, "app", "build.gradle.kts")
+    try:
+        with open(kts, encoding="utf-8") as fh:
+            src = fh.read()
+    except OSError as exc:
+        print(f"读不到 {kts}：{exc}", file=sys.stderr)
+        return None, None
+    m = re.search(r'create\("%s"\)\s*\{(.*?)\n\s*\}' % re.escape(flavor), src, re.S)
+    if m is None:
+        return None, None
+    blk = m.group(1)
+    vn = re.search(r'versionName\s*=\s*ciVersionName\s*\?:\s*"([^"]+)"', blk)
+    vc = re.search(r"versionCode\s*=\s*ciVersionCode\s*\?:\s*(\d+)", blk)
+    return (vn.group(1) if vn else None), (vc.group(1) if vc else None)
+
+
+EXPECT_PACKAGE, EXPECT_LABEL = EDITIONS[EDITION]
+_gvn, _gvc = _gradle_flavor_version(EDITION)
+# 环境变量可以覆盖 —— CI 若改了注入策略（比如发版也走 CI），这里留了出口。
+EXPECT_VERSION_NAME = os.environ.get("EXPECT_VERSION_NAME") or _gvn
+EXPECT_VERSION_CODE = os.environ.get("EXPECT_VERSION_CODE") or _gvc
+if not EXPECT_VERSION_NAME or not EXPECT_VERSION_CODE:
+    print(
+        "解析不出期望版本号（app/build.gradle.kts 里找不到该 flavor 的 "
+        'versionName = ciVersionName ?: "..." / versionCode = ciVersionCode ?: N），'
+        "也没提供 EXPECT_VERSION_NAME / EXPECT_VERSION_CODE 环境变量。\n"
+        "自检拒绝在「没有期望值」的情况下继续 —— 否则那两条断言会静默通过。",
+        file=sys.stderr,
+    )
+    sys.exit(2)
 DEFAULT_APK = os.path.join(
     REPO, "app", "build", "outputs", "apk", EDITION, "release",
     f"app-{EDITION}-release.apk",
