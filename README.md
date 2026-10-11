@@ -1,12 +1,26 @@
 # Plant Identify Library
 
+**English** · An Android app for **AI multi-image plant identification** and personal
+**plant archives**. Upload 1–5 photos of the *same* plant (whole plant / leaf / flower /
+fruit / bark) and a vision model judges them **jointly**, rather than classifying each
+photo separately and voting. All data stays on your device — there is no backend, and
+you bring your own AI API key. Supports vision AI (Qwen / Doubao / OpenAI / any
+OpenAI-compatible endpoint) and **Pl@ntNet**, which can be cross-checked against each
+other. MIT licensed. Requires Android 8.0+ (API 26). *This README is in Chinese; the
+sections below cover installation, AI configuration and every feature in detail.*
+
+---
+
 面向园林专业学生、园林园艺从业者、植物学学习者与植物调查人员的 **AI 多图植物识别 + 植物数字档案** Android 应用。
 
 核心特色是**多图联合识别**：一次上传 1–5 张同一株植物的照片（整株 / 叶片 / 花 / 果实 / 树皮），由视觉模型综合所有视觉证据进行判断，而非对每张图独立识别后投票。
 
 ## 当前状态
 
-**功能开发完成，已发布 v1.0.1。** `main` 可编译、可运行；单元测试 **452 用例**（226 × 2 个版本）全绿。
+**功能开发完成，已发布 v1.0.2.1011。** `main` 可编译、可运行；单元测试 **586 用例**（293 × 2 个版本）全绿。
+
+识别通道支持**视觉 AI 与 Pl@ntNet 两条路**，并可开启「自动（双源比对）」让两者互校。
+两条通道的**置信度语义不同**（语言模型自估 vs 分类器后验），因此应用**只做定性比对、绝不把两者的分数相加或平均**。
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
@@ -20,6 +34,9 @@
 | 7 | 性能优化、异常兜底、单元测试、双版本发布 | ✅ |
 | — | **识别任务队列**：一批照片丢进队列、后台逐个识别、自动重试与僵尸自愈 | ✅ 完整版 |
 | — | **数据清洗与去重**：回收站、六级重复判定、AI 复核、合并预览 | ✅ 完整版 |
+| — | **文件夹 / 景观分析**：把植物归入项目或场地，本地计算乔灌草层次与多样性指数 | ✅ 完整版 |
+| — | **导入 / 协作**：与他人交换档案，增量合并、逐张图片判重 | ✅ 完整版 |
+| — | **Pl@ntNet 通道**：分类器识别，可与视觉 AI 双源比对 | ✅ 双版本 |
 | — | **压测三档**（100 / 1000 / 10000 株）与出包自检 | ✅ 见 [`Plant Identify - 压测报告.md`](Plant%20Identify%20-%20压测报告.md) |
 
 ## 下载与安装
@@ -28,13 +45,18 @@
 
 | 版本 | 包名 | 说明 |
 |---|---|---|
-| [v1.0.1-full](https://github.com/Battlemagnet1/plant-identify/releases/tag/v1.0.1-full) | `com.plantidentify.full` | **完整版，推荐**。含统计、识别任务、数据清洗、地点、导出与备份 |
-| [v1.0.0-full](https://github.com/Battlemagnet1/plant-identify/releases/tag/v1.0.0-full) | `com.plantidentify` | 基础版。功能面自 1.0.0 起未变，从该页取 `plant-identify-base-v1.0.0.apk` |
+| [v1.0.2.1011-full](https://github.com/Battlemagnet1/plant-identify/releases/tag/v1.0.2.1011-full) | `com.plantidentify.full` | **完整版，推荐**（当前 Latest）。含统计、识别任务、数据清洗、文件夹与景观、地点、导入导出与备份 |
+| [v1.0.2.1011](https://github.com/Battlemagnet1/plant-identify/releases/tag/v1.0.2.1011) | `com.plantidentify` | **基础版**。多图识别、百科、档案、搜索、归并、Pl@ntNet 都有；统计 / 清洗 / 地点 / 导入导出等仅完整版有 |
 
 - 要求 **Android 8.0（API 26）及以上**。
 - **两个版本可以同时安装**（包名不同），档案数据也能通过备份包互相迁移。
 - 签名证书 SHA-256：`95065ED8A06005DB8F6D8D6EB0403E1C94DAF0D5B0AF2D160C5C38643675D9F1`
 - 装完**必须先配置 AI 服务**才能识别，见下文「如何配置 API」。
+
+> ⚠️ **v1.0.2.1011 的 APK 不在 Release 的 assets 里**，而在 `release-assets` 分支上
+> （本机到 `uploads.github.com` 的上行受限，无法上传大文件）：
+> 完整版 <https://github.com/Battlemagnet1/plant-identify/raw/release-assets/release-apk/plant-identify-full-v1.0.2.1011.apk> ·
+> 基础版 <https://github.com/Battlemagnet1/plant-identify/raw/release-assets/release-apk/plant-identify-base-v1.0.2.1011.apk>
 
 > 图文并茂的使用教程见 [`docs/Plant Identify Library 使用教程.pdf`](docs/)。
 
@@ -46,11 +68,13 @@
 |---|---|---|
 | applicationId | `com.plantidentify` | `com.plantidentify.full` |
 | 应用显示名 | Plant Identify Library | Plant Identify Library（完整版） |
-| 版本号 | `1.0.0` / code 1 | `1.0.1` / code 2 |
-| 多图识别 · 植物百科 · 档案 · 搜索筛选 · 多次观察 · 归并 · 备注 | ✅ | ✅ |
+| 版本号 | `1.0.2.1011` / code 3 | `1.0.2.1011` / code 4 |
+| 多图识别 · 植物百科 · 档案 · 搜索筛选 · 多次观察 · 归并 · 备注 · Pl@ntNet | ✅ | ✅ |
 | 统计数据（不同植物 / 观察次数 / 照片数） | — | ✅ |
 | 识别任务队列（后台批量识别） | — | ✅ |
 | 数据清洗与去重（回收站、AI 复核、合并预览） | — | ✅ |
+| 文件夹与景观分析（本地乔灌草层次、多样性指数） | — | ✅ |
+| 导入 / 协作（与他人交换档案，增量合并） | — | ✅ |
 | 观察地点（定位权限 + 地点记录与展示） | — | ✅ |
 | HTML 导出 · 备份 · 恢复（数据管理页） | — | ✅ |
 | 常用名称（俗称）与病虫害防治 | — | ✅ |
@@ -58,8 +82,9 @@
 | 编辑页的照片增删 | — | ✅ |
 
 **版本号各管各的**：两个包独立分发，各自的用户只会覆盖升级到自己那条线。
-所以完整版加了功能就跳（`1.0.0` → `1.0.1`），基础版没加就不跳（仍是 `1.0.0`）。
+所以完整版加了功能就跳（`1.0.1` → `1.0.2`），基础版没加就不跳。
 新增版本时 `versionCode` 必须大于上一版，否则老用户升不上来 —— 那时唯一的症状是「装完还是旧版本」。
+（两条线的 code 从此各自递增：base 1 → 2 → 3，full 1 → 2 → 3 → 4。）
 
 两者的**数据库结构、AI 请求、图片存储方式完全相同**，差异只在界面入口（由编译期常量 `FULL_EDITION` 控制，见 `app/src/main/java/com/plantidentify/AppEdition.kt`）。
 因此两边的备份包可以互相迁移：基础版备份的数据，完整版能完整恢复，反之亦然。
@@ -148,6 +173,24 @@ adb install -r app/build/outputs/apk/full/debug/app-full-debug.apk
 **文字分析服务默认「与视觉识别共用」**——两家相同就什么都不用改；
 想省钱（视觉用大模型、文字用小模型）或想分开计费，关掉这个开关单独填一次即可。
 
+### 识别通道：视觉 AI / Pl@ntNet / 自动
+
+设置页的「识别通道」决定识别**走哪条路**：
+
+| 通道 | 说明 |
+|---|---|
+| **AI 视觉识别** | 默认。走上面的视觉模型，能给出形态特征与判定依据 |
+| **Pl@ntNet** | 走 [Pl@ntNet](https://my.plantnet.org) 的分类器。需单独填它的 API Key（免费申请，每天约 50 次）。只回答「是什么物种」，没有判定依据与养护建议 |
+| **自动（双源比对）** | 视觉 AI 为主源、Pl@ntNet 为副源，结论一致就注明，不一致就**把双方都摆出来要求人工确认** |
+
+Pl@ntNet 的端点固定为 `https://my-api.plantnet.org/v2`（可改，便于使用镜像或自建代理）。
+它的 API Key 与上面两条通道的 Key **分开存放**，同样经过 Keystore 加密。
+
+> ⚠️ **两条通道的置信度不可比较。** Pl@ntNet 给的是分类器后验概率，视觉模型给的是
+> 对自身判断的把握程度估计 —— 两者语义不同，**相加、平均、比大小都是无意义的数字**。
+> 所以「自动」模式只做定性比对，不会替你挑一个「分数高的」。
+> 同理，**后台批量识别固定走视觉 AI**：Pl@ntNet 免费额度太小，队列一跑就超限。
+
 配置存放在本机的 DataStore 中，其中 API Key 使用 **Android Keystore 的 AES-256-GCM** 加密后存放。
 
 > 卸载重装会清除 Keystore 中的密钥，即使 DataStore 里还留着密文也解不开（界面会退回「缺少 API Key」）。
@@ -199,7 +242,7 @@ Base URL 指 OpenAI 兼容接口的**根路径**，通常以 `/v1` 结尾，应�
 
 #### 本地联调（开发用）
 
-仓库自带一个 OpenAI 兼容的模拟服务端，含 22 种响应模式，可模拟超时、401、429、非 JSON 返回等各类异常：
+仓库自带一个 OpenAI 兼容的模拟服务端，含 26 种响应模式，可模拟超时、401、429、非 JSON 返回等各类异常：
 
 ```bash
 python tools/mock_ai_server.py --port 8899
@@ -353,7 +396,9 @@ python tools/verify_release_apk.py --edition full
 - 应用**没有**任何统计 / 上报 SDK，不做任何埋点
 - 图片、档案、备份全部存放在应用私有目录，不对外开放
 
-> 本仓库计划在功能验证完成后转为公开。请注意：**转为公开会暴露全部提交历史**，因此从第一次提交起就按公开标准执行；若历史中曾出现密钥，须先清理历史并吊销密钥，再转公开。
+> 本仓库自 2026-09-23 起为**公开仓库**。公开会暴露全部提交历史，
+> 因此从第一次提交起就按公开标准执行；若历史中曾出现密钥，
+> 必须先清理历史并吊销密钥再转公开。（当前历史已核对无密钥泄露。）
 
 ## 目录结构
 
@@ -366,9 +411,13 @@ python tools/verify_release_apk.py --edition full
 │       └── test/                              # 纯 JVM 单元测试
 ├── tools/                                     # 开发与验收工具（都走 _env.py 解析本机环境，不写死路径）
 │   ├── _env.py                                #   本机环境解析（ADB / SDK / 仓库根）
-│   ├── mock_ai_server.py                      #   OpenAI 兼容模拟服务端（22 种响应模式）
+│   ├── mock_ai_server.py                      #   OpenAI 兼容模拟服务端（26 种响应模式）
+│   ├── mock_plantnet_server.py                #   Pl@ntNet 模拟服务端（校验字段顺序与 lang 参数）
 │   ├── stress_test.py                         #   压测驱动（100 / 1000 / 10000 株，报告落 build/）
 │   ├── verify_phase3.py … verify_phase6plus.py#   各阶段验收脚本（UI + 数据库断言）
+│   ├── verify_plantnet_fix.py                 #   Pl@ntNet 配置保存与落盘验证
+│   ├── verify_plantnet_mock.py                #   Pl@ntNet 端到端识别验证（本地 mock）
+│   ├── verify_plantnet_live.py                #   Pl@ntNet 真实服务端验证
 │   ├── verify_migration_schema.py             #   Room 手写迁移的离线校验
 │   ├── smoke_dual_edition.sh                  #   两个版本共存、互不覆盖的冒烟
 │   └── verify_release_apk.py                  #   出包自检（支持 --edition base|full）
@@ -397,44 +446,47 @@ python tools/verify_release_apk.py --edition full
 
 - 识别任务的「建任务时拍照 / 调序 / 部位标注」与「现场调查」两个页面尚未实现
 - 置信度是模型对当前视觉证据的自信程度，**不是**经过科学验证的物种鉴定概率
+- **Pl@ntNet 免费账户配额很小**（每天约 50 次识别），因此后台批量识别**固定走视觉 AI** ——
+  队列一跑就会超限，让任务接连失败比「不用 Pl@ntNet」更糟
+- **Pl@ntNet 与视觉 AI 的置信度不能相互比较**：一个是分类器后验概率、一个是语言模型的
+  自我估计。应用只做「结论一致 / 不一致」的定性比对，不一致时把双方摆出来要求人工确认，
+  **绝不自动挑一个「分数高的」**
+- Pl@ntNet 按**分类器**能力返回结果，没有形态特征、判定依据与养护建议 —— 这些字段留空，
+  需要时由文字分析通道补齐
 
 ## 分支与协作约定
 
-- `main` 为稳定分支，始终保持可编译
-- 每个阶段在独立分支上开发
-- 变更通过 Pull Request 提交，**经人工审阅确认后**才合并；**不可自动合并**
-- 提交前自检：`./gradlew assembleDebug` 零错误、`./gradlew test` 全绿
-
-PR 是**逐层叠加**的：每个 PR 的 base 指向上一个阶段的分支（不是 `main`），
-因此**合并顺序必须从底到顶**。
-
-合并用**快进**而不是 squash —— 叠加链天然满足「`main` 是最后一层的祖先」，
-快进只移动指针：**不产生新提交、不改写历史**，所有分支指针原地不动，
-任何一层都能 `git checkout <分支>` 回到当时。
+流程：`功能分支 ─PR→ develop（CI + 单测）─绿→ main（--ff-only）`
 
 ```bash
-# 1) 开一层新的（base 指向当前最后一层分支）
-git checkout chore/stress-test-and-release-1.0.1
-git checkout -b feature/<new-slug>
+# 1) 从 develop 开功能分支
+git checkout develop && git pull
+git checkout -b feat/<new-slug>
 # ... 实现与自检 ...
 git add -A && git commit -m "feat(...): ..."
-git push -u origin feature/<new-slug>
-gh pr create --base chore/stress-test-and-release-1.0.1
+git push -u origin feat/<new-slug>
 
-# 2) 人工确认后，整条链一次性进 main
-git checkout main
-git merge --ff-only feature/<new-slug>   # --ff-only 是安全闸：main 若已有新提交会直接失败
-git push origin main
+# 2) 开 PR 到 develop，等 CI
+gh pr create --base develop --head feat/<new-slug>
+gh pr checks <编号> --watch          # CI 约 2～3 分钟
 
-# 3) base 是 main 的那个 PR 会被自动标记 Merged；其余仍 OPEN，逐个关闭并注明提交号
-gh pr close <编号> --comment "内容已随 #<最后一层> 的快进合并进入 main（<SHA>）；分支保留作回滚点。"
+# 3) CI 绿、人工确认后，快进合并
+git checkout develop && git merge --ff-only feat/<new-slug> && git push
+git checkout main    && git merge --ff-only develop           && git push
 ```
 
+- **`main` 与 `develop` 都用 `--ff-only` 快进合并** —— 只移动指针，不产生新提交、不改写历史
 - **分支一律保留**作回滚点。回滚 `main`：`git push --force origin <合并前 SHA>:main`
   （**只在 main 上还没有新提交时**有效）
-- 合并后核对分支指针没动：合并前后各跑一次
-  `git for-each-ref --format='%(refname:short) %(objectname:short)' refs/heads/`
-  再 diff，**应当只有 `main` 一行变化**
+- **不可自动合并** —— CI 绿是必要条件，仍需人工确认后才合
+- 提交前自检：`./gradlew assembleDebug` 零错误、`./gradlew test` 全绿
+
+> ⚠️ **CI 绿 ≠ 可以发版**。CI 只跑 `test assembleDebug`
+> （两个 flavor 的单测 + 两个 debug 包），**不含 lint、不含任何 release 变体、
+> 不验数据库迁移**。发版前的迁移正确性、lint 门槛、R8 仍要本机手工跑。
+>
+> 另：不要手动触发 `workflow_dispatch` 的「正式发行版」—— 它实际产出的是
+> **debug 包**，会盖掉正式版本的 Latest 标记。
 
 
 ## 免责声明
