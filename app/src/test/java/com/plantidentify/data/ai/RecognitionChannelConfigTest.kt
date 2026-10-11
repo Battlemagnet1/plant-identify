@@ -307,4 +307,73 @@ class RecognitionChannelConfigTest {
         assertEquals(3, fields.count { it.first == PlantNetProvider.ORGAN_FIELD })
         assertEquals(3, fields.count { it.first == PlantNetProvider.IMAGES_FIELD })
     }
+
+    // ---------------------------------------------------------- 语言与中文名
+
+    /**
+     * 结果语言必须是 `zh`。
+     *
+     * ## 为什么这条重要（口径对齐）
+     *
+     * Pl@ntNet **默认回英文**：
+     *   不带 lang  → commonNames = ["Camphor laurel", "Camphor tree"]
+     *   lang=zh    → commonNames = ["樟", "Zhāng"]
+     *
+     * 而本项目的档案、搜索、归并（`DuplicateMatcher` 按中文名比对）
+     * 全部按**中文名**工作，视觉 AI 通道给的也是中文名。
+     * 不传 lang 会让同一个应用里一个通道给「樟」、另一个给
+     * 「Camphor tree」，档案里混着两种语言，搜索与归并跟着一起失效。
+     *
+     * 实测支持列表见 `/v2/languages`（含 zh / zh-tw / zh-hant）。
+     */
+    @Test
+    fun `结果语言是中文`() {
+        assertEquals("zh", PlantNetProvider.LANGUAGE)
+    }
+
+    /**
+     * 必须在混着拼音的 commonNames 里挑出**含汉字**的那个。
+     *
+     * ## 为什么不能直接取第一个
+     *
+     * 即使传了 `lang=zh`，Pl@ntNet 仍会把拼音混进 commonNames，
+     * 且**顺序不保证**。实测数据：
+     *     ["叶子花", "Ye zi hua", "Yè zi huā"]
+     * 直接 `firstOrNull()` 有可能拿到 "Ye zi hua"，于是档案里出现一个
+     * 拼音当正式中文名 —— 与视觉 AI 给的「叶子花」对不上，
+     * 搜索和归并都失效，而且**不会报错**。
+     */
+    @Test
+    fun `含汉字的候选优先于拼音`() {
+        assertTrue(PlantNetProvider.hasHan("叶子花"))
+        assertTrue(PlantNetProvider.hasHan("樟"))
+        assertTrue(PlantNetProvider.hasHan("月季"))
+
+        assertFalse("纯拼音不该被当成中文名", PlantNetProvider.hasHan("Ye zi hua"))
+        assertFalse(PlantNetProvider.hasHan("Camphor tree"))
+        assertFalse(PlantNetProvider.hasHan(""))
+        assertFalse(PlantNetProvider.hasHan("Zhāng"))
+    }
+
+    /**
+     * 真实的 Pl@ntNet 返回形状：拼音排在汉字**前面**时，
+     * 也必须选出汉字那个。
+     */
+    @Test
+    fun `拼音在前时仍选出中文名`() {
+        // 模拟 Pl@ntNet 实际可能返回的顺序
+        val commonNames = listOf("Ye zi hua", "叶子花", "Yè zi huā")
+        val picked = commonNames.firstOrNull(PlantNetProvider::hasHan)
+            ?: commonNames.firstOrNull()
+        assertEquals("叶子花", picked)
+    }
+
+    /** 一个汉字都没有时（纯英文物种名）退回第一个，不能选成空 */
+    @Test
+    fun `没有汉字时退回第一个候选`() {
+        val commonNames = listOf("Camphor laurel", "Camphor tree")
+        val picked = commonNames.firstOrNull(PlantNetProvider::hasHan)
+            ?: commonNames.firstOrNull()
+        assertEquals("Camphor laurel", picked)
+    }
 }

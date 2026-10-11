@@ -55,8 +55,7 @@ SAMPLE = {
                           "scientificNameAuthorship": "", "scientificName": "Rosa"},
                 "family": {"scientificNameWithoutAuthor": "Rosaceae",
                            "scientificNameAuthorship": "", "scientificName": "Rosaceae"},
-                "commonNames": ["月季", "Chinese rose", "China rose"],
-                "scientificName": "Rosa chinensis Jacq.",
+                "commonNames": ["月季", "Chinese rose", "China rose"],                "scientificName": "Rosa chinensis Jacq.",
             },
             "gbif": {"id": "3002148"},
             "powo": {"id": "739123-1"},
@@ -172,6 +171,19 @@ class Handler(BaseHTTPRequestHandler):
                 "error": "Bad Request",
                 "message": "字段顺序不符合官方示例：organs 必须在对应的 images 之前",
                 "receivedOrder": order,
+            })
+            return
+
+        # ---- 校验 lang 参数（v1.0.3）----
+        #
+        # 不传 `lang` 时 Pl@ntNet **默认回英文**，而本项目按中文名工作
+        # （档案、搜索、归并、以及与视觉 AI 通道的口径对齐）。
+        # 所以这里把「没传 lang」直接判为错误 —— 让回归在自动化里暴露。
+        if "lang=" not in self.path:
+            self._json(400, {
+                "statusCode": 400,
+                "error": "Bad Request",
+                "message": "缺少 lang 参数：不传会回英文名，与视觉 AI 通道口径不一致",
             })
             return
 

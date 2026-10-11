@@ -123,8 +123,19 @@ class PlantNetProvider(
                 // 路径是 `/v2/identify/{project}` —— **不是 /v1**，见
                 // AiConfig.defaultPlantNet 的说明（/v1 与 my.plantnet.org
                 // 都已下线，用错只会得到 404，与 Key 对不对无关）。
+                //
+                // `lang=zh` 是**口径对齐**的关键（v1.0.3）：
+                // 不带它时 `commonNames` 默认回英文（`樟` → "Camphor tree"），
+                // 而视觉 AI 那条通道返回的是中文。同一个应用里一个通道给
+                // 「樟」、另一个给「Camphor tree」，档案里会混着两种语言，
+                // 搜索、归并（按中文名比对）也跟着一起失效。
+                //
+                // 实测（同一张图）：
+                //   不带 lang  → commonNames = ["Camphor laurel", "Camphor tree", ...]
+                //   lang=zh    → commonNames = ["樟", "Zhāng"]
+                // 支持的语言见 /v2/languages（含 zh / zh-tw / zh-hant）。
                 val url = "${config.baseUrl.trimEnd('/')}/identify/$PROJECT" +
-                    "?api-key=${config.apiKey}"
+                    "?api-key=${config.apiKey}&lang=$LANGUAGE"
                 // 大图上传在部分网络下很慢：388KB 的照片实测 40s 都可能不够。
                 // 用 per-call timeout 覆盖默认的 90s，避免「传了一半超时」
                 // 被当成「连不上」。
@@ -218,10 +229,23 @@ class PlantNetProvider(
                 val genus = species.optJSONObject("genus")
                     ?.optString("scientificNameWithoutAuthor")?.takeIf { it.isNotBlank() }
 
-                // 中文名优先（界面与档案的主键都是中文名），没有就用学名
+                // 中文名优先，没有就用学名。
+                //
+                // ## 为什么还要在 commonNames 里挑一次
+                //
+                // 即使传了 `lang=zh`，Pl@ntNet 的 commonNames 里仍会**混着
+                // 拼音**，而且是拉丁字母排在前面：
+                //     ["叶子花", "Ye zi hua", "Yè zi huā"]
+                // 更糟的是顺序不保证 —— 直接取 firstOrNull() 有可能拿到
+                // "Ye zi hua"，于是档案里出现一个拼音当正式中文名，
+                // 与视觉 AI 给的「叶子花」对不上，搜索和归并都会失效。
+                //
+                // 所以显式挑「含中日韩汉字」的那个；一个都没有才退回第一个。
+                val display = commonNames.firstOrNull(::hasHan) ?: commonNames.firstOrNull()
+
                 add(
                     ParsedCandidate(
-                        name = commonNames.firstOrNull() ?: scientific ?: continue,
+                        name = display ?: scientific ?: continue,
                         latinName = scientific,
                         family = family,
                         genus = genus,
@@ -288,6 +312,19 @@ class PlantNetProvider(
         const val PROJECT = "all"
 
         /**
+         * 结果语言（v1.0.3）。
+         *
+         * **必须显式传 `zh`**，不能靠服务端默认：默认回英文，
+         * 而本项目的档案、搜索、归并全都按**中文名**工作
+         * （见 `DuplicateMatcher` 按中文名比对），
+         * 视觉 AI 通道给的也是中文名。两个通道口径不一致会让
+         * 「同一株植物」在两条通道下变成两个不同的名字。
+         *
+         * 支持的语言列表见 `/v2/languages`（`zh` / `zh-tw` / `zh-hant` 都在）。
+         */
+        const val LANGUAGE = "zh"
+
+        /**
          * 带上照片的识别请求超时（秒）。
          *
          * 默认 90s 对**上传**往往不够：实测一张 388 KB 的照片在受限网络下
@@ -304,6 +341,15 @@ class PlantNetProvider(
          * 「传得慢」误报成「连不上」。
          */
         const val CONNECT_TIMEOUT_SECONDS = 60L
+
+        /**
+         * 字符串里是否含汉字（CJK 统一表意文字 + 扩展 A）。
+         *
+         * 用来在 Pl@ntNet 混着拼音的 commonNames 里挑出真正的中文名。
+         * 只判范围、不做任何词典查询 —— 够用且没有依赖。
+         */
+        fun hasHan(text: String): Boolean =
+            text.any { it.code in 0x4E00..0x9FFF || it.code in 0x3400..0x4DBF }
 
         /**
          * 生成 multipart 的字段顺序：**每张图先 organs、后 images**。
