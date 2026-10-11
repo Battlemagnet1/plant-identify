@@ -141,6 +141,33 @@ data class AiEndpointConfig(
             if (apiKey.isBlank()) add("API Key")
         }
 
+    /**
+     * Pl@ntNet 专用的可用性判据（v1.0.3）。
+     *
+     * ## 为什么不能复用 [isUsable]
+     *
+     * [isUsable] 要求 `baseUrl` + `model` + `apiKey` **三项**都非空，那是
+     * OpenAI 兼容服务的形状。而 **Pl@ntNet 没有「模型名」这个概念** ——
+     * [AiConfig.defaultPlantNet] 把 `model` 显式留成空串（`/v1/identify/all`
+     * 里的 `all` 是**项目**，不是模型）。
+     *
+     * 于是套用 [isUsable] 时出现一颗必然触发的雷：用户把 Key 填对了，
+     * `model` 依然是空的 → `isUsable == false` → 识别永远报
+     * 「还没有配置 Pl@ntNet 的 API Key」，而 Key 其实就在库里。
+     * 提示与事实相反，用户只能反复重填一个正确的 Key。
+     *
+     * Pl@ntNet 真正需要的只有两项：端点与 Key。
+     */
+    val isUsableAsPlantNet: Boolean
+        get() = baseUrl.isNotBlank() && apiKey.isNotBlank()
+
+    /** Pl@ntNet 侧缺哪一项（口径同 [isUsableAsPlantNet]，不含模型名） */
+    val missingPlantNetFields: List<String>
+        get() = buildList {
+            if (baseUrl.isBlank()) add("Base URL")
+            if (apiKey.isBlank()) add("Pl@ntNet API Key")
+        }
+
     /** 切换预设：套用新预设的默认值 */
     fun withPreset(preset: AiPreset, vision: Boolean): AiEndpointConfig = copy(
         preset = preset,
@@ -167,8 +194,8 @@ data class AiConfig(
     /**
      * Pl@ntNet 通道配置（v1.0.2 Phase 3 §十六）。
      *
-     * 复用 [AiEndpointConfig]：`baseUrl`（默认 `https://my.plantnet.org`）与
-     * `apiKey` 有意义，`model`/`preset` 不用。null = 未配置。
+     * 复用 [AiEndpointConfig]：`baseUrl`（默认 `https://my-api.plantnet.org/v2`）
+     * 与 `apiKey` 有意义，`model`/`preset` 不用。null = 未配置。
      */
     val plantNet: AiEndpointConfig? = null,
 
@@ -181,6 +208,63 @@ data class AiConfig(
     val effectiveText: AiEndpointConfig get() = text ?: vision
 
     val textPreset: AiPreset get() = effectiveText.preset
+
+    /**
+     * 当前通道**自身**是否配置完整（v1.0.3）。
+     *
+     * ## 为什么保存前要按通道分别校验
+     *
+     * 保存按钮曾经只看 `vision.isUsable`，于是选了 Pl@ntNet 而没配视觉 AI 时，
+     * 按钮直接置灰 —— 用户填好了 Pl@ntNet 的 Key 却**根本点不动保存**，
+     * 而且界面上的理由是「视觉识别配置不完整」，与他想做的事毫无关系。
+     *
+     * 校验必须跟着用户选的那条通道走：
+     * - [RecognitionChannel.VISION_AI] → 视觉配置（Pl@ntNet 的 Key 可有可无）
+     * - [RecognitionChannel.PLANT_NET] → Pl@ntNet 配置才算数
+     * - [RecognitionChannel.AUTO] → 视觉是主源，**必须可用**；Pl@ntNet 是可选副源
+     *   （未配时自动模式会安静降级为主源，见 `RecognitionExecutor`）
+     */
+    fun isUsableFor(channel: RecognitionChannel): Boolean = when (channel) {
+        RecognitionChannel.VISION_AI -> vision.isUsable
+        RecognitionChannel.PLANT_NET -> plantNet?.isUsableAsPlantNet == true
+        RecognitionChannel.AUTO -> vision.isUsable
+    }
+
+    /**
+     * 当前通道还缺什么。空列表表示可以保存。
+     *
+     * 文案里点明是**哪条通道**缺东西：笼统的「配置不完整」会让用户
+     * 跑去补一条他压根没打算用的通道。
+     */
+    fun missingFor(channel: RecognitionChannel): List<String> = when (channel) {
+        RecognitionChannel.VISION_AI ->
+            vision.missingFields.map { "AI 视觉识别：$it" }
+
+        RecognitionChannel.PLANT_NET -> when {
+            plantNet == null -> listOf("Pl@ntNet：API Key")
+            else -> plantNet.missingPlantNetFields.map { "Pl@ntNet：$it" }
+        }
+
+        RecognitionChannel.AUTO -> vision.missingFields.map { "AI 视觉识别（自动模式的主源）：$it" }
+    }
+
+    /** 当前通道是否已就绪（供设置页状态卡使用） */
+    fun readinessOf(channel: RecognitionChannel): String = when (channel) {
+        RecognitionChannel.VISION_AI ->
+            if (vision.isUsable) "已就绪" else "不完整（缺 ${vision.missingFields.joinToString("、")}）"
+
+        RecognitionChannel.PLANT_NET -> when {
+            plantNet == null -> "未配置（缺 Pl@ntNet API Key）"
+            plantNet.isUsableAsPlantNet -> "已就绪"
+            else -> "不完整（缺 ${plantNet.missingPlantNetFields.joinToString("、")}）"
+        }
+
+        RecognitionChannel.AUTO -> if (vision.isUsable) {
+            if (plantNet?.isUsableAsPlantNet == true) "已就绪（双源）" else "已就绪（仅视觉 AI，未配 Pl@ntNet 副源）"
+        } else {
+            "不完整（缺 ${vision.missingFields.joinToString("、")}）"
+        }
+    }
 
     companion object {
         fun defaultVision(): AiEndpointConfig = AiEndpointConfig(
@@ -195,10 +279,31 @@ data class AiConfig(
             model = AiPreset.DEFAULT.textModel,
         )
 
-        /** Pl@ntNet 的默认端点（它不是 OpenAI 兼容服务，preset 无意义） */
+        /**
+         * Pl@ntNet 的默认端点（它不是 OpenAI 兼容服务，preset 无意义）。
+         *
+         * ## ⚠️ 域名是 `my-api.plantnet.org` 且版本是 `/v2`（v1.0.3 修正）
+         *
+         * 这里曾经写的是 `https://my.plantnet.org`，而 `PlantNetProvider`
+         * 拼的是 `/v1/identify/{project}` —— **两个都错**：
+         *
+         * | | 错的（旧） | 对的（官方文档） |
+         * |---|---|---|
+         * | 域名 | `my.plantnet.org` | `my-api.plantnet.org` |
+         * | 版本 | `/v1/` | `/v2/` |
+         *
+         * `my.plantnet.org` 是**网站**不是 API 主机，`/v1` 也早已下线 ——
+         * 于是每次识别都返回 404「Not found」，与 API Key 对不对**毫无关系**。
+         * 实测：`my.plantnet.org/v1/…` 恒返回
+         * `{"statusCode":404,"message":"Server Error"}`，而
+         * `my-api.plantnet.org/v2/…` 在不带图时返回
+         * `{"statusCode":400,"message":"\"images\" is required"}`（说明路由正确）。
+         *
+         * 参考：https://my.plantnet.org/doc/api/identify
+         */
         fun defaultPlantNet(): AiEndpointConfig = AiEndpointConfig(
             preset = AiPreset.DEFAULT,
-            baseUrl = "https://my.plantnet.org",
+            baseUrl = "https://my-api.plantnet.org/v2",
             model = "",
         )
 

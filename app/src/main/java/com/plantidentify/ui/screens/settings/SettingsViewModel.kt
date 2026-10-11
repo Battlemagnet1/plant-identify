@@ -16,9 +16,12 @@ import com.plantidentify.data.ai.RecognitionChannel
 import com.plantidentify.data.ai.TextProvider
 import com.plantidentify.data.ai.VisionProvider
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 /**
@@ -102,6 +105,16 @@ class SettingsViewModel(
     private val _plantNetApiKey = MutableStateFlow("")
     val plantNetApiKey: StateFlow<String> = _plantNetApiKey.asStateFlow()
 
+    /**
+     * Pl@ntNet 的 Base URL（可编辑，v1.0.3）。
+     *
+     * 默认是官方 v2 端点。允许改是必要的：旧版本的默认值
+     * （`my.plantnet.org` + `/v1`）是错的，升级用户的本地配置里可能
+     * 还存着坏值；走镜像 / 自建代理的用户也需要指到别处。
+     */
+    private val _plantNetBaseUrl = MutableStateFlow(AiConfig.defaultPlantNet().baseUrl)
+    val plantNetBaseUrl: StateFlow<String> = _plantNetBaseUrl.asStateFlow()
+
     private val _saving = MutableStateFlow(false)
     val saving: StateFlow<Boolean> = _saving.asStateFlow()
 
@@ -113,6 +126,54 @@ class SettingsViewModel(
     private val _hasSavedKey = MutableStateFlow(false)
     val hasSavedKey: StateFlow<Boolean> = _hasSavedKey.asStateFlow()
 
+    /**
+     * 当前通道能否保存（驱动保存按钮的 `enabled`）。
+     *
+     * 做成 StateFlow 而不是普通函数：Compose 只会因**状态变化**重组，
+     * 普通函数读的是 `_form.value` 这类非状态快照，用户改完表单后
+     * 按钮的亮灭不会跟着变 —— 会出现「填好了但按钮还是灰的，得切个页面回来」。
+     *
+     * 输入只订阅真正影响结论的四项：视觉表单、通道、Pl@ntNet Key、
+     * 「使用同一个 AI 服务」开关（它决定 text 是否为 null）。文字表单的
+     * 字段不参与判定（文字配置不完整不阻止保存），所以不订阅 ——
+     * 订阅了只会让按钮无谓地闪。
+     */
+    val canSave: StateFlow<Boolean> = combine(
+        _form, _channel, _plantNetApiKey, _sharesOneEndpoint, _plantNetBaseUrl,
+    ) { vision, channel, pnKey, share, pnBaseUrl ->
+        AiConfig(
+            vision = vision,
+            text = if (share) null else _textForm.value,
+            plantNet = if (pnKey.trim().isEmpty()) {
+                null
+            } else {
+                AiConfig.defaultPlantNet().copy(
+                    baseUrl = pnBaseUrl.trim().ifEmpty { AiConfig.defaultPlantNet().baseUrl },
+                    apiKey = pnKey.trim(),
+                )
+            },
+            recognitionChannel = channel,
+        ).isUsableFor(channel)
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    /** 当前通道还缺什么（空 = 可保存）。状态卡与失败提示共用同一口径。 */
+    val missingForChannel: StateFlow<List<String>> = combine(
+        _form, _channel, _plantNetApiKey, _plantNetBaseUrl,
+    ) { vision, channel, pnKey, pnBaseUrl ->
+        AiConfig(
+            vision = vision,
+            plantNet = if (pnKey.trim().isEmpty()) {
+                null
+            } else {
+                AiConfig.defaultPlantNet().copy(
+                    baseUrl = pnBaseUrl.trim().ifEmpty { AiConfig.defaultPlantNet().baseUrl },
+                    apiKey = pnKey.trim(),
+                )
+            },
+            recognitionChannel = channel,
+        ).missingFor(channel)
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
     init {
         viewModelScope.launch {
             val config = store.config.first()
@@ -122,6 +183,10 @@ class SettingsViewModel(
             _strategy.value = config.promptStrategy
             _channel.value = config.recognitionChannel
             _plantNetApiKey.value = config.plantNet?.apiKey.orEmpty()
+            // 已保存的端点回填；没存过就用官方默认 v2
+            _plantNetBaseUrl.value = config.plantNet?.baseUrl
+                ?.takeIf { it.isNotBlank() }
+                ?: AiConfig.defaultPlantNet().baseUrl
             _hasSavedKey.value = config.vision.apiKey.isNotEmpty()
         }
     }
@@ -163,6 +228,10 @@ class SettingsViewModel(
 
     fun updatePlantNetApiKey(value: String) {
         _plantNetApiKey.value = value
+    }
+
+    fun updatePlantNetBaseUrl(value: String) {
+        _plantNetBaseUrl.value = value.trim()
     }
 
     fun setSharesOneEndpoint(share: Boolean) {
@@ -268,14 +337,25 @@ class SettingsViewModel(
 
     /** 保存配置 */
     fun save() {
-        val candidate = _form.value
-        if (!candidate.isUsable) {
-            _message.value = "视觉识别配置还缺少：${candidate.missingFields.joinToString("、")}"
-            return
-        }
-
         val share = _sharesOneEndpoint.value
         val textCandidate = _textForm.value
+        val channel = _channel.value
+        val pnKey = _plantNetApiKey.value.trim()
+
+        // ---------------- 按**当前通道**校验（v1.0.3）----------------
+        //
+        // 这里曾经无条件校验 `_form.value.isUsable`（视觉配置），于是选了
+        // Pl@ntNet 的用户即使把 Key 填对了也会被拦下 —— 而且提示写的是
+        // 「视觉识别配置还缺少：…」，与他要做的事毫无关系。更糟的是
+        // 同一判据还挂在保存按钮的 `enabled` 上，按钮直接置灰、连点都点不了。
+        //
+        // 现在拼出「即将落盘的那份配置」再问它当前通道是否可用，
+        // 校验口径与实际保存内容**必然一致**（不会再出现「按 A 校验、存 B」）。
+        val candidate = buildConfig(channel, share, textCandidate, pnKey)
+        if (!candidate.isUsableFor(channel)) {
+            _message.value = "还缺少：" + candidate.missingFor(channel).joinToString("、")
+            return
+        }
 
         // 文字配置不完整时**不阻止保存** —— 那表示用户暂时不打算生成植物百科，
         // 是合理选择而非错误。运行时若该配置不可用，会按「文字分析不可用」处理：
@@ -284,27 +364,14 @@ class SettingsViewModel(
         viewModelScope.launch {
             _saving.value = true
             try {
-                val pnKey = _plantNetApiKey.value.trim()
-                // 选了 Pl@ntNet / 自动但 Key 还没填：**不阻止保存** ——
-                // 视觉配置本身是好的，与「文字配置不完整不阻止保存」同一个哲学；
-                // 运行时该通道会报缺 Key 并给出指引
-                val config = AiConfig(
-                    vision = candidate,
-                    // null 表示「复用视觉配置」
-                    text = if (share) null else textCandidate,
-                    promptStrategy = _strategy.value,
-                    plantNet = if (_channel.value == RecognitionChannel.VISION_AI && pnKey.isEmpty()) {
-                        null
-                    } else {
-                        AiConfig.defaultPlantNet().copy(apiKey = pnKey)
-                    },
-                    recognitionChannel = _channel.value,
-                )
-
-                store.save(config)
+                store.save(candidate)
                     .onSuccess {
-                        _hasSavedKey.value = candidate.apiKey.isNotEmpty()
-                        _message.value = "已保存。API Key 已加密存放在本机，不会上传到任何服务器。"
+                        _hasSavedKey.value = candidate.vision.apiKey.isNotEmpty()
+                        _message.value = if (channel == RecognitionChannel.PLANT_NET) {
+                            "已保存。Pl@ntNet API Key 已加密存放在本机，不会上传到任何服务器。"
+                        } else {
+                            "已保存。API Key 已加密存放在本机，不会上传到任何服务器。"
+                        }
                     }
                     .onFailure { error ->
                         _message.value = error.message ?: "保存失败"
@@ -314,6 +381,41 @@ class SettingsViewModel(
             }
         }
     }
+
+    /**
+     * 按当前表单值拼出完整配置（v1.0.3）。
+     *
+     * 抽出来是为了让**校验与保存用同一份对象**：分成两处构造的话，
+     * 「按视觉配置校验、却存了 Pl@ntNet 配置」这类错配迟早会发生，
+     * 而且不会报错，只表现为某个通道神秘地不可用。
+     *
+     * 注意 [canSave] / [missingForChannel] 也走同一套构造与判据 ——
+     * 按钮亮不亮、提示说什么、按下去存什么，三者同源。
+     */
+    private fun buildConfig(
+        channel: RecognitionChannel,
+        share: Boolean,
+        textCandidate: AiEndpointConfig,
+        pnKey: String,
+    ): AiConfig = AiConfig(
+        vision = _form.value,
+        // null 表示「复用视觉配置」
+        text = if (share) null else textCandidate,
+        promptStrategy = _strategy.value,
+        // 端点用表单里的值（默认已是官方 v2）。Key 为空则整个 plantNet
+        // 存 null，形成「未配置」这个明确状态。
+        plantNet = if (pnKey.isEmpty()) {
+            null
+        } else {
+            AiConfig.defaultPlantNet().copy(
+                baseUrl = _plantNetBaseUrl.value.trim().ifEmpty {
+                    AiConfig.defaultPlantNet().baseUrl
+                },
+                apiKey = pnKey,
+            )
+        },
+        recognitionChannel = channel,
+    )
 
     /** 清除全部配置（含 Keystore 中的密钥） */
     fun clearAll() {
@@ -325,6 +427,7 @@ class SettingsViewModel(
             _strategy.value = PromptStrategy.DEFAULT
             _channel.value = RecognitionChannel.VISION_AI
             _plantNetApiKey.value = ""
+            _plantNetBaseUrl.value = AiConfig.defaultPlantNet().baseUrl
             _hasSavedKey.value = false
             _testOutcome.value = null
             _textTestOutcome.value = null

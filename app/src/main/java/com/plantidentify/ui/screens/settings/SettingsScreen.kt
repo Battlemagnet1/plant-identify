@@ -1,5 +1,6 @@
 package com.plantidentify.ui.screens.settings
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -89,6 +90,9 @@ fun SettingsScreen(
     val strategy by viewModel.strategy.collectAsStateWithLifecycle()
     val channel by viewModel.channel.collectAsStateWithLifecycle()
     val plantNetApiKey by viewModel.plantNetApiKey.collectAsStateWithLifecycle()
+    val plantNetBaseUrl by viewModel.plantNetBaseUrl.collectAsStateWithLifecycle()
+    val canSave by viewModel.canSave.collectAsStateWithLifecycle()
+    val missingForChannel by viewModel.missingForChannel.collectAsStateWithLifecycle()
 
     val sharesOneEndpoint by viewModel.sharesOneEndpoint.collectAsStateWithLifecycle()
     val textForm by viewModel.textForm.collectAsStateWithLifecycle()
@@ -139,6 +143,9 @@ fun SettingsScreen(
                     } else {
                         textForm.readinessText
                     },
+                    channel = channel,
+                    plantNetApiKey = plantNetApiKey,
+                    missingForChannel = missingForChannel,
                 )
             }
 
@@ -352,8 +359,10 @@ fun SettingsScreen(
                 ChannelSection(
                     selected = channel,
                     plantNetApiKey = plantNetApiKey,
+                    plantNetBaseUrl = plantNetBaseUrl,
                     onSelect = viewModel::selectChannel,
                     onApiKeyChange = viewModel::updatePlantNetApiKey,
+                    onBaseUrlChange = viewModel::updatePlantNetBaseUrl,
                 )
             }
 
@@ -361,7 +370,12 @@ fun SettingsScreen(
                 Button(
                     onClick = viewModel::save,
                     modifier = Modifier.fillMaxWidth(),
-                    enabled = !saving && form.isUsable,
+                    // 按**当前通道**判定能否保存（v1.0.3）。
+                    //
+                    // 曾经只看 `form.isUsable`（视觉配置），于是选了 Pl@ntNet
+                    // 的用户把 Key 填好了，按钮依然是灰的 —— 点不动，
+                    // 而且旁边写着「视觉识别配置不完整」，答非所问。
+                    enabled = !saving && canSave,
                 ) {
                     if (saving) {
                         CircularProgressIndicator(
@@ -595,14 +609,32 @@ private fun SectionTitle(text: String) {
     )
 }
 
-/** 顶部状态卡：一眼看出当前配置缺什么 */
+/**
+ * 顶部状态卡：一眼看出当前配置缺什么。
+ *
+ * ## 为什么按通道分别描述（v1.0.3）
+ *
+ * 这张卡原本只谈视觉识别配置，于是选了 Pl@ntNet 的用户看到的是
+ * 「视觉识别配置不完整 · 还缺少：API Key」—— 那是他没打算用的通道，
+ * 而真正要填的 Pl@ntNet Key 反而一个字都没提。
+ *
+ * 现在标题与正文都跟着 [channel] 走：选哪条通道，就报哪条通道的状态。
+ */
 @Composable
 private fun ConfigStatusCard(
     form: AiEndpointConfig,
     hasSavedKey: Boolean,
     textReadiness: String,
+    channel: RecognitionChannel,
+    plantNetApiKey: String,
+    missingForChannel: List<String>,
 ) {
-    val isReady = form.isUsable
+    val isReady = missingForChannel.isEmpty()
+    val channelName = when (channel) {
+        RecognitionChannel.VISION_AI -> "AI 视觉识别"
+        RecognitionChannel.PLANT_NET -> "Pl@ntNet"
+        RecognitionChannel.AUTO -> "自动（双源比对）"
+    }
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
@@ -622,18 +654,34 @@ private fun ConfigStatusCard(
 
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
-                text = if (isReady) "视觉识别配置已就绪" else "视觉识别配置不完整",
+                text = if (isReady) "$channelName 配置已就绪" else "$channelName 配置不完整",
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.Medium,
                 color = contentColor,
             )
             Spacer(Modifier.height(6.dp))
             Text(
-                text = if (isReady) {
-                    val keyState = if (hasSavedKey) "API Key 已保存" else "API Key 尚未保存"
-                    "当前使用 ${form.preset.displayName} · $keyState"
-                } else {
-                    "还缺少：${form.missingFields.joinToString("、")}"
+                text = when {
+                    // Pl@ntNet 的 Key 不回显明文，只报「填没填」——
+                    // 与视觉侧 hasSavedKey 同一个做法
+                    channel == RecognitionChannel.PLANT_NET && isReady ->
+                        "Pl@ntNet API Key ${if (plantNetApiKey.isNotBlank()) "已填写" else "尚未填写"}"
+
+                    !isReady -> "还缺少：${missingForChannel.joinToString("、")}"
+
+                    // 自动模式已就绪时说明副源是可选的：未配 Pl@ntNet
+                    // 也能用（会安静降级为主源），不必让用户以为还差一步
+                    channel == RecognitionChannel.AUTO ->
+                        if (plantNetApiKey.isNotBlank()) {
+                            "视觉 AI 就绪 · Pl@ntNet 副源已填写，将做双源比对"
+                        } else {
+                            "视觉 AI 就绪 · 未配 Pl@ntNet 副源（自动模式将只用视觉 AI）"
+                        }
+
+                    else -> {
+                        val keyState = if (hasSavedKey) "API Key 已保存" else "API Key 尚未保存"
+                        "当前使用 ${form.preset.displayName} · $keyState"
+                    }
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = contentColor,
@@ -919,8 +967,10 @@ private fun SecurityNoteCard() {
 private fun ChannelSection(
     selected: RecognitionChannel,
     plantNetApiKey: String,
+    plantNetBaseUrl: String,
     onSelect: (RecognitionChannel) -> Unit,
     onApiKeyChange: (String) -> Unit,
+    onBaseUrlChange: (String) -> Unit,
 ) {
     SectionCard(title = "识别通道") {
         RecognitionChannel.entries.forEach { channel ->
@@ -928,10 +978,23 @@ private fun ChannelSection(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(vertical = 4.dp),
+                    // 整行可点（v1.0.3）。
+                    //
+                    // 之前只有那个 RadioButton 自己响应点击，而 Row 里
+                    // 文字与圆圈隔了 100px 左右 —— 用户按习惯点标签，
+                    // **什么都不会发生**，通道没切过去，接着填的 Key 也就
+                    // 存不到 Pl@ntNet 那一栏。表现就是「填了没用 / 保存不了」。
+                    //
+                    // 列表项的可点区域必须覆盖整行 —— 这是最基本的一条，
+                    // 但 Compose 的 RadioButton 默认只把点击接在自己身上。
+                    .clickable { onSelect(channel) }
+                    .padding(vertical = 4.dp, horizontal = 4.dp),
             ) {
                 RadioButton(
                     selected = selected == channel,
+                    // 整行已经处理点击，圆圈只负责显示选中态。
+                    // onClick 仍保留（null 会让它变成不可交互的装饰），
+                    // 但不再依赖用户去精确点中它。
                     onClick = { onSelect(channel) },
                 )
                 Column(Modifier.weight(1f)) {
@@ -961,6 +1024,36 @@ private fun ChannelSection(
             Spacer(Modifier.height(4.dp))
             Text(
                 text = "免费账户每天约 50 次识别；Key 与其他 API Key 一样只加密存放在本机。",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            // 端点可改（v1.0.3）。
+            //
+            // 默认是官方 v2 端点，但允许覆盖有两个实际理由：
+            // ① 旧版本把域名与版本都写错了（my.plantnet.org/v1），
+            //    用户升级后如果本地存着坏值，能自己改回来而不必清数据；
+            // ② 走镜像 / 自建代理 / 企业网关的用户需要指向别的地址。
+            // 顺带让这个通道可被自动化测试指向本地 mock 服务端。
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                value = plantNetBaseUrl,
+                onValueChange = onBaseUrlChange,
+                label = { Text("Pl@ntNet Base URL") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                placeholder = { Text("https://my-api.plantnet.org/v2") },
+                supportingText = { Text("官方端点是 https://my-api.plantnet.org/v2") },
+            )
+            Spacer(Modifier.height(4.dp))
+            // 说清「保存按钮与视觉配置无关」——用户曾经被置灰的按钮
+            // 挡在这里，却看到提示说视觉配置缺东西，完全对不上
+            Text(
+                text = if (selected == RecognitionChannel.PLANT_NET) {
+                    "选 Pl@ntNet 时只校验这一项：填入 Key 后即可保存，不需要再配 AI 视觉识别。"
+                } else {
+                    "自动模式以 AI 视觉识别为主源；Pl@ntNet 是可选副源，不填也能保存与识别。"
+                },
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

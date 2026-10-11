@@ -83,10 +83,11 @@ android {
             buildConfigField("boolean", "FULL_EDITION", "false")
 
             // 本地构建保留已发布的版本号；CI 会注入日期版本号。
-            // v1.0.0 发的是 1，v1.0.2 必须**大于上一版**（1 → 2），
-            // 否则已装 v1.0.0 的设备「安装成功但跑的还是旧版本」。
-            versionCode = ciVersionCode ?: 2
-            versionName = ciVersionName ?: "1.0.2"
+            // v1.0.0 发的是 1，v1.0.2 是 2，**v1.0.2.1011 是 3** ——
+            // versionCode 必须严格递增，否则已装旧版的设备
+            // 「安装成功但跑的还是旧版本」，非常安静。
+            versionCode = ciVersionCode ?: 3
+            versionName = ciVersionName ?: "1.0.2.1011"
         }
         create("full") {
             dimension = "edition"
@@ -97,8 +98,9 @@ android {
             buildConfigField("boolean", "FULL_EDITION", "true")
 
             // 本地构建保留已发布的版本号；CI 注入的 versionCode 会跨日递增。
-            versionCode = ciVersionCode ?: 3
-            versionName = ciVersionName ?: "1.0.2"
+            // 两条分发线**各自递增**：full 上一版是 3，这一版是 4。
+            versionCode = ciVersionCode ?: 4
+            versionName = ciVersionName ?: "1.0.2.1011"
         }
     }
 

@@ -172,7 +172,7 @@ class AiSettingsStore(
                 text = text?.copy(apiKey = cipher.decrypt(prefs[textSecretKey]).orEmpty()),
                 plantNet = plantNet?.copy(
                     apiKey = cipher.decrypt(prefs[plantNetSecretKey]).orEmpty(),
-                ),
+                )?.let(::migratePlantNetEndpoint),
                 recognitionChannel = RecognitionChannel.fromName(
                     root.optString(FIELD_CHANNEL).takeIf { it.isNotBlank() },
                 ),
@@ -195,6 +195,35 @@ class AiSettingsStore(
             baseUrl = json.optString(FIELD_BASE_URL),
             model = json.optString(FIELD_MODEL),
         )
+    }
+
+    /**
+     * 修正历史配置里**错误的 Pl@ntNet 端点**（v1.0.3）。
+     *
+     * ## 为什么要在读取时修，而不是让用户自己去改
+     *
+     * 旧版本默认写的是 `https://my.plantnet.org` 且请求拼 `/v1/identify` ——
+     * 域名与版本**两个都错**，于是识别恒返回 404，与 API Key 对不对无关。
+     * 已经保存过配置的用户不会重填 Key，若不自动纠正，他们升级后
+     * 依然会看到「识别失败」，而且这次连「没配 Key」的提示都没有，
+     * 只剩一个 404，根本无从下手。
+     *
+     * 只在**命中已知的坏值**时替换，用户自定义过的其它端点一律尊重 ——
+     * 不能把「用户故意指向自建/镜像服务」当成错误配置覆盖掉。
+     */
+    private fun migratePlantNetEndpoint(config: AiEndpointConfig): AiEndpointConfig {
+        val fixed = config.baseUrl.trimEnd('/')
+        val isLegacy = fixed == "https://my.plantnet.org" ||
+            fixed == "http://my.plantnet.org" ||
+            fixed == "https://my.plantnet.org/v1" ||
+            // 域名对了但版本还是 v1 的中间态
+            fixed == "https://my-api.plantnet.org/v1" ||
+            fixed == "https://my-api.plantnet.org"
+
+        if (!isLegacy) return config
+
+        Log.i(TAG, "检测到旧的 Pl@ntNet 端点，已自动迁移到 v2")
+        return config.copy(baseUrl = AiConfig.defaultPlantNet().baseUrl)
     }
 
     private companion object {

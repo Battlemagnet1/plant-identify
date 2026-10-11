@@ -125,8 +125,20 @@ class RecognitionExecutor(
         val trace = TimingTrace()
 
         val config = aiSettingsStore.current()
-        if (!config.vision.isUsable) {
-            return RecognizeOutcome.Failed(AiFailure.NotConfigured(config.vision.missingFields))
+        // 配置校验必须**跟着当前通道走**（v1.0.3）。
+        //
+        // 这里原本无条件校验 `config.vision.isUsable`，于是选了 Pl@ntNet 的
+        // 用户在**还没轮到通道分支**时就被拦下，看到的是
+        // 「还没有配置 AI 服务，缺少：API Key」——
+        // 而 Pl@ntNet 的 Key 明明已经填好、通道也已经切过去了。
+        //
+        // 这是最后一个拦路虎：前面把「保存被视觉配置门控」修好之后，
+        // 识别环节仍然被同一类思维（默认走视觉 AI）挡住。
+        // 校验口径必须与实际要用的那条通道一致，否则修好了保存也白搭。
+        if (!config.isUsableFor(config.recognitionChannel)) {
+            return RecognizeOutcome.Failed(
+                AiFailure.NotConfigured(config.missingFor(config.recognitionChannel)),
+            )
         }
 
         // 逐张生成（或复用）压缩副本。单张失败不中断 —— 有一张能用就继续识别
@@ -155,7 +167,10 @@ class RecognitionExecutor(
         return when (config.recognitionChannel) {
             RecognitionChannel.PLANT_NET -> {
                 val pn = config.plantNet
-                if (pn == null || !pn.isUsable) {
+                // 判据用 isUsableAsPlantNet（不需要「模型名」，Pl@ntNet 没有这个概念）。
+                // 曾经用 isUsable，于是 Key 填对了也判为不可用 ——
+                // 用户会反复重填一个完全正确的 Key。
+                if (pn == null || !pn.isUsableAsPlantNet) {
                     return RecognizeOutcome.Failed(
                         AiFailure.LocalProblem(
                             "还没有配置 Pl@ntNet 的 API Key",
@@ -239,7 +254,8 @@ class RecognitionExecutor(
             is VisionCallResult.Success -> vision.response
             is VisionCallResult.Failure -> {
                 val pn = config.plantNet
-                if (pn == null || !pn.isUsable) return RecognizeOutcome.Failed(vision.failure)
+                // 同上：Pl@ntNet 的可用性不看模型名
+                if (pn == null || !pn.isUsableAsPlantNet) return RecognizeOutcome.Failed(vision.failure)
 
                 val fallback = plantNetProvider.recognize(
                     VisionRequest(images = images, config = pn),
@@ -285,7 +301,7 @@ class RecognitionExecutor(
         }
 
         val pnConfig = config.plantNet
-        if (pnConfig == null || !pnConfig.isUsable) {
+        if (pnConfig == null || !pnConfig.isUsableAsPlantNet) {
             // 未配置副源：自动模式不强制要求配它，安静降级为主源
             return RecognizeOutcome.Recognized(
                 response = primaryResponse,

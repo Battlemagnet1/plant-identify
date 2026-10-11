@@ -49,15 +49,34 @@ class PlantNetProvider(
     client: OkHttpClient? = null,
 ) : VisionProvider {
 
+    /**
+     * ## 超时为什么给得比其它 Provider 宽（v1.0.3）
+     *
+     * Pl@ntNet 是**上传图片**的接口（multipart），而其它通道发的是 base64
+     * 的 JSON 小请求。实测：一张 388 KB 的照片在受限网络下**上传**就要
+     * 40s 以上，用原来 30s 连接 / 90s 读取的配置会直接超时，
+     * 而超时会被报成「无法连接到该地址」——
+     * 把用户引向「Base URL 填错了」这个**完全错误**的方向。
+     *
+     * 这里把三个超时都放宽；真正的上限由 `UPLOAD_TIMEOUT_SECONDS`
+     * 在每次请求上覆盖。
+     */
     private val http = client ?: OkHttpClient.Builder()
-        .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(90, TimeUnit.SECONDS)
+        .connectTimeout(CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        .writeTimeout(UPLOAD_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        .readTimeout(UPLOAD_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        .callTimeout(UPLOAD_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(true)
         .build()
 
     override suspend fun recognize(request: VisionRequest): VisionCallResult =
         withContext(Dispatchers.IO) {
             val config = request.config
-            if (config.apiKey.isBlank()) {
+            // 用 Pl@ntNet 自己的判据，**不是** `isUsable` ——
+            // 后者要求「模型名」非空，而 Pl@ntNet 没有这个概念（见
+            // AiEndpointConfig.isUsableAsPlantNet 的说明）。套用它会让
+            // 填对了 Key 的用户永远看到「还没有配置」，提示与事实相反。
+            if (!config.isUsableAsPlantNet) {
                 return@withContext VisionCallResult.Failure(
                     AiFailure.LocalProblem("还没有配置 Pl@ntNet 的 API Key", "到「设置」页填入"),
                 )
@@ -80,10 +99,18 @@ class PlantNetProvider(
                     }
                 }.build()
 
-                // Pl@ntNet 的 key 只收 query 参数，放进 multipart 无效
-                val url = "${config.baseUrl.trimEnd('/')}/v1/identify/$PROJECT" +
+                // Pl@ntNet 的 key 只收 query 参数，放进 multipart 无效。
+                // 路径是 `/v2/identify/{project}` —— **不是 /v1**，见
+                // AiConfig.defaultPlantNet 的说明（/v1 与 my.plantnet.org
+                // 都已下线，用错只会得到 404，与 Key 对不对无关）。
+                val url = "${config.baseUrl.trimEnd('/')}/identify/$PROJECT" +
                     "?api-key=${config.apiKey}"
-                http.newCall(Request.Builder().url(url).post(body).build()).execute().use { resp ->
+                // 大图上传在部分网络下很慢：388KB 的照片实测 40s 都可能不够。
+                // 用 per-call timeout 覆盖默认的 90s，避免「传了一半超时」
+                // 被当成「连不上」。
+                val call = http.newCall(Request.Builder().url(url).post(body).build())
+                call.timeout().timeout(UPLOAD_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                call.execute().use { resp ->
                     val raw = resp.body?.string().orEmpty()
                     if (!resp.isSuccessful) {
                         val detail = AiFailure.sanitize(raw, config.apiKey)
@@ -207,13 +234,17 @@ class PlantNetProvider(
         withContext(Dispatchers.IO) {
             try {
                 val started = System.currentTimeMillis()
-                // Pl@ntNet 没有 ping 接口，发一个空识别请求探活：
-                // 400 与 401 的差别就足以区分「通」与「key 不对」
-                val url = "${request.config.baseUrl.trimEnd('/')}/v1/identify/$PROJECT" +
+                // Pl@ntNet 没有 ping 接口，发一个**不带图**的 GET 探活：
+                // 400（缺 images）说明路由通、Key 也认；401/403 才是 Key 不对。
+                //
+                // ⚠️ 路径是 `/v2/identify/`（不是 /v1），且域名必须是
+                // `my-api.plantnet.org` —— 用错会恒得 404，看着像「服务坏了」。
+                val url = "${request.config.baseUrl.trimEnd('/')}/identify/$PROJECT" +
                     "?api-key=${request.config.apiKey}"
                 http.newCall(Request.Builder().url(url).get().build()).execute().use { resp ->
                     val latency = System.currentTimeMillis() - started
                     when {
+                        // 400 = 路由正确但没给图，这正是我们要的「通」
                         resp.isSuccessful || resp.code == 400 ->
                             ConnectivityResult.Success(
                                 model = "Pl@ntNet $PROJECT",
@@ -221,6 +252,14 @@ class PlantNetProvider(
                             )
                         resp.code == 401 || resp.code == 403 ->
                             ConnectivityResult.Failure(AiFailure.Unauthorized(null))
+                        // 404 单独说清楚：多半是端点配错了（域名/版本），
+                        // 而不是「服务端出错」——后者会把用户引向完全错误的方向
+                        resp.code == 404 -> ConnectivityResult.Failure(
+                            AiFailure.EndpointNotFound(
+                                "Pl@ntNet 返回 404。请确认端点是否为 " +
+                                    "https://my-api.plantnet.org/v2",
+                            ),
+                        )
                         else -> ConnectivityResult.Failure(
                             AiFailure.ServerError(resp.code, null),
                         )
@@ -244,5 +283,23 @@ class PlantNetProvider(
     private companion object {
         /** all 项目库覆盖面最广（含世界范围的园林与野生植物） */
         const val PROJECT = "all"
+
+        /**
+         * 带上照片的识别请求超时（秒）。
+         *
+         * 默认 90s 对**上传**往往不够：实测一张 388 KB 的照片在受限网络下
+         * 40s 都没传完。超时会被报成「连不上」，把用户引向网络排查，
+         * 而实际只是传得慢。给足 180s，宁可慢也不要误报。
+         */
+        const val UPLOAD_TIMEOUT_SECONDS = 180L
+
+        /**
+         * 建立连接的超时（秒）。
+         *
+         * 30s → 60s：受限网络下 TLS 握手本身就可能很慢。
+         * 连接超时与**传输**超时是两件事，前者给够才不会把
+         * 「传得慢」误报成「连不上」。
+         */
+        const val CONNECT_TIMEOUT_SECONDS = 60L
     }
 }
