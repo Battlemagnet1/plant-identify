@@ -107,20 +107,43 @@ gh release list --limit 5
 两条分发线**各自递增**。Release 说明**必须写 APK SHA-256 与证书 SHA-256**。
 资产命名 `plant-identify-{base,full}-vX.Y.Z.apk`。
 ⚠️ `gh release create "file#name"` 的别名在 gh 2.97 上**不生效** —— 先 `cp` 成目标名字再上传。
+⚠️ **在受限网络上 `gh release upload` 会失败**（上行 ~3.4 KB/s、7–20 秒必断，
+`HTTP 100` 之后被切断）。变通办法是走 SSH 通道：把 APK 提交到一个
+**孤立分支**（本仓库是 `release-assets`）再 push，用户从
+`github.com/<owner>/<repo>/raw/release-assets/release-apk/<文件名>` 下载。
+提交时**务必只 `git add` 那两个 apk**，别用 `git add -A`（孤立分支会把整个源码树带进去）。
 
 **CI 绿 ≠ 可以发版**：CI 只跑 `test assembleDebug`（两个 flavor 的单测 + 两个 debug 包），
 **不含 lint、不含 release 变体、不验数据库迁移**。发版前的迁移正确性、lint、R8 仍要本机手工跑。
 另：别顺手点 `workflow_dispatch` 的「正式发行版」—— 它发的是 debug 包，会盖掉 `v1.0.x` 的 Latest。
 
-## 5 · 当前状态（2026-10-11）
+## 5 · 当前状态（2026-10-11 晚）
 
-- `main = develop = d6cae45`，**v1.0.2 已发布**（base `code 2` / full `code 3`）
-- 全量回归 7 个脚本全绿，单测约 272 用例全绿
+- `main = develop = 30ea58b`，**v1.0.2.1011 已发布**（base `code 3` / full `code 4`）
+- 单测 **293 用例全绿**（v1.0.2 时期的 272 + 新增 21）
 - **下一步：修 10000 株时清洗深度检查的 OOM** ——
   `CleaningDataLoader.load()` 用 `getAll()` 一次读全库（单株带 8 个百科长文本 ≈14 KB），
   堆上限 192 MB 直接崩。修法是**分页 / 轻量投影读取**
   （可参照导入侧已经做过的 `MatchSnapshotRow`）。
   另有一项系统性问题：全项目 **0 处 `rememberSaveable`**，进程被杀后页面状态全丢。
+
+### Pl@ntNet 有三条「改回去就坏」的约定
+
+v1.0.2.1011 刚修完，都是**不报错**或**报错指向错误方向**的坑：
+
+1. **端点必须是 `https://my-api.plantnet.org/v2`** ——
+   `my.plantnet.org` 是网站不是 API 主机、`/v1` 已下线，用错**恒返回 404**，
+   而且**与 API Key 对不对毫无关系**（用户会反复重填一个正确的 Key）。
+2. **multipart 必须「先 `organs` 后 `images`」**（官方示例顺序）——
+   配对靠**位置**，顺序错了不报错，只会把部位配到别的图片上。
+3. **请求必须带 `lang=zh`**，且要从 `commonNames` 里挑**含汉字**的那个 ——
+   Pl@ntNet 默认回英文，且即使指定中文也会混入拼音、顺序不保证
+   （`["叶子花","Ye zi hua","Yè zi huā"]`）。本项目按中文名做搜索与重复检测，
+   两个识别通道语言不一致会导致**同一株植物变成两个不同的名字**。
+
+另：**配置校验一律按当前通道**（`AiConfig.isUsableFor(channel)`）。
+保存门控与识别前置校验都曾经只看「视觉配置」，害得选 Pl@ntNet 的用户
+连保存按钮都点不动。
 
 ## 6 · 文档地图
 
