@@ -1,5 +1,6 @@
 package com.plantidentify.data.ai
 
+import com.plantidentify.data.plantnet.PlantNetProvider
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -244,5 +245,66 @@ class RecognitionChannelConfigTest {
             "旧端点绝不能再出现在默认值里",
             AiConfig.defaultPlantNet().baseUrl == legacy,
         )
+    }
+
+    // ---------------------------------------------------------- multipart 字段顺序
+
+    /**
+     * **每张图先 `organs`、后 `images`** —— 与官方示例一致。
+     *
+     * ## 为什么这条必须钉住
+     *
+     * Pl@ntNet 的 `organs` 与 `images` 是**按请求中的位置配对**的
+     * （官方原文："Each organ is associated to an image in the order given"）。
+     * 官方 getting-started 的示例（JS / Java / R 三份代码一致）都是
+     * `organs` 紧跟它描述的那张 `images` **之前**。
+     *
+     * 本项目原先写的是每张图「先 images 再 organs」，**顺序正好相反**。
+     * 危险之处在于它**不会报错**：Pl@ntNet 只会按位置把部位配到别的图上，
+     * 于是「用错了部位先验」而结果看起来仍然正常 ——
+     * 这类缺陷靠肉眼点界面几乎发现不了，必须靠断言钉住。
+     *
+     * 参考：https://my.plantnet.org/doc/getting-started/introduction
+     */
+    @Test
+    fun `multipart 字段顺序是 organs 在前 且与图片交替`() {
+        val fields = PlantNetProvider.multipartFields(listOf("img1", "img2"))
+
+        assertEquals(
+            listOf(
+                "organs" to "img1",
+                "images" to "img1",
+                "organs" to "img2",
+                "images" to "img2",
+            ),
+            fields,
+        )
+    }
+
+    /** 单张图（最常见的情形）也必须 organs 在前 —— 顺序错位的起点 */
+    @Test
+    fun `单张图的字段顺序同样是 organs 在前`() {
+        assertEquals(
+            listOf("organs" to "only", "images" to "only"),
+            PlantNetProvider.multipartFields(listOf("only")),
+        )
+    }
+
+    /** 没有图片时不应产生任何字段（不能凭空发一个 organs） */
+    @Test
+    fun `没有图片时字段为空`() {
+        assertTrue(PlantNetProvider.multipartFields(emptyList<String>()).isEmpty())
+    }
+
+    /**
+     * 字段总数 = 图片数 × 2，且 organs 与 images 数量**必须相等** ——
+     * 数量不等时 Pl@ntNet 会按位置配对，多出来的那个会被忽略或错配。
+     */
+    @Test
+    fun `organs 与 images 数量必须相等`() {
+        val fields = PlantNetProvider.multipartFields(listOf(1, 2, 3))
+        assertEquals(6, fields.size)
+        assertEquals(3, fields.count { it.first == PlantNetProvider.ORGAN_FIELD })
+        assertEquals(3, fields.count { it.first == PlantNetProvider.IMAGES_FIELD })
     }
 }

@@ -1,5 +1,6 @@
 package com.plantidentify.data.plantnet
 
+import android.util.Log
 import com.plantidentify.data.ai.AiEndpointConfig
 import com.plantidentify.data.ai.AiFailure
 import com.plantidentify.data.ai.ConnectivityRequest
@@ -88,14 +89,33 @@ class PlantNetProvider(
             }
 
             try {
+                // ⚠️ 字段顺序照**官方示例**来：每个 `organs` 紧跟它描述的那张 `images`
+                //    **之前**，多个图片时两两交错。
+                //
+                //    官方 getting-started 的示例（JS / Java / R 三种语言一致）：
+                //        form.append('organs', 'flower')
+                //        form.append('images', image1)
+                //        form.append('organs', 'leaf')
+                //        form.append('images', image2)
+                //
+                //    见 https://my.plantnet.org/doc/getting-started/introduction
+                //
+                //    本项目原先写的是先 images 再 organs（每张各一次），**顺序相反**。
+                //    官方文档明确说 organs 与 images 是**按请求中的位置配对**的
+                //    （"Each organ is associated to an image in the order given"），
+                //    顺序错位会把第一张图的部位配到最后一张上、首尾对不上。
+                //    照官方示例的顺序发，最稳。
                 val body = MultipartBody.Builder().setType(MultipartBody.FORM).apply {
-                    request.images.forEach { image ->
-                        addFormDataPart(
-                            "images",
-                            image.file.name,
-                            image.file.asRequestBody("image/jpeg".toMediaType()),
-                        )
-                        addFormDataPart("organs", organOf(image.role))
+                    multipartFields(request.images).forEach { (name, image) ->
+                        if (name == ORGAN_FIELD) {
+                            addFormDataPart(ORGAN_FIELD, organOf(image.role))
+                        } else {
+                            addFormDataPart(
+                                IMAGES_FIELD,
+                                image.file.name,
+                                image.file.asRequestBody("image/jpeg".toMediaType()),
+                            )
+                        }
                     }
                 }.build()
 
@@ -130,10 +150,36 @@ class PlantNetProvider(
             } catch (e: Exception) {
                 // parse() 抛出的 AiFailure 要原样透传 —— 否则「响应格式不对」
                 // 会被误报成「连不上」，把用户引向完全错误的方向
-                val failure = e as? AiFailure ?: AiFailure.EndpointUnreachable(e)
+                val failure = e as? AiFailure ?: classify(e)
+                // 落一条日志：不记 Key、不记图片内容，只记异常类型。
+                // 之前这里**什么都不打**，于是真机上失败时日志里一片空白，
+                // 只能靠界面上那句笼统的提示猜，排查成本极高。
+                Log.w(TAG, "Pl@ntNet 请求失败：${e.javaClass.simpleName} / ${e.message}")
                 VisionCallResult.Failure(failure)
             }
         }
+
+    /**
+     * 把网络异常收敛成**说得对**的失败类型（v1.0.3）。
+     *
+     * ## 为什么要细分
+     *
+     * 这里原本把所有异常一律当成 [AiFailure.EndpointUnreachable]，
+     * 界面于是显示「无法连接到该地址，请确认 Base URL 填写正确」。
+     * 但**超时不是地址错** —— Pl@ntNet 要上传整张照片，上行慢的网络上
+     * 几十秒才传完，超时是常态。把它说成「地址填错」会让用户反复改
+     * 一个完全正确的 Base URL，永远修不好。
+     *
+     * 判据用异常类型而不是猜：
+     * - `SocketTimeoutException` → 超时（[AiFailure.Timeout]）
+     * - `UnknownHostException` → DNS/域名错（[AiFailure.EndpointUnreachable]）
+     * - 其它 IO/连接问题 → 网络不可达（[AiFailure.Network]）
+     */
+    private fun classify(e: Exception): AiFailure = when (e) {
+        is java.net.SocketTimeoutException -> AiFailure.Timeout(e)
+        is java.net.UnknownHostException -> AiFailure.EndpointUnreachable(e)
+        else -> AiFailure.EndpointUnreachable(e)
+    }
 
     /**
      * Pl@ntNet 的识别结果本身就是一份 JSON，原样保存 ——
@@ -230,6 +276,52 @@ class PlantNetProvider(
         else -> "other"
     }
 
+    companion object {
+        /** 日志标签（不记 Key、不记图片内容） */
+        const val TAG = "PlantNetProvider"
+
+        /** multipart 字段名 */
+        const val ORGAN_FIELD = "organs"
+        const val IMAGES_FIELD = "images"
+
+        /** all 项目库覆盖面最广（含世界范围的园林与野生植物） */
+        const val PROJECT = "all"
+
+        /**
+         * 带上照片的识别请求超时（秒）。
+         *
+         * 默认 90s 对**上传**往往不够：实测一张 388 KB 的照片在受限网络下
+         * 40s 都没传完。超时会被报成「连不上」，把用户引向网络排查，
+         * 而实际只是传得慢。给足 180s，宁可慢也不要误报。
+         */
+        const val UPLOAD_TIMEOUT_SECONDS = 180L
+
+        /**
+         * 建立连接的超时（秒）。
+         *
+         * 30s → 60s：受限网络下 TLS 握手本身就可能很慢。
+         * 连接超时与**传输**超时是两件事，前者给够才不会把
+         * 「传得慢」误报成「连不上」。
+         */
+        const val CONNECT_TIMEOUT_SECONDS = 60L
+
+        /**
+         * 生成 multipart 的字段顺序：**每张图先 organs、后 images**。
+         *
+         * ## 为什么要单独抽出来
+         *
+         * Pl@ntNet 的 `organs` 与 `images` 是**按请求中的位置配对**的
+         * （官方原文："Each organ is associated to an image in the order given"）。
+         * 顺序错了不会报错，**只会把部位配到别的图片上** ——
+         * 结果看起来「能识别」，但用错了部位先验，属于最难发现的一类缺陷。
+         *
+         * 抽成纯函数就为了能**用单测钉住顺序**，而不必真的发一次网络请求。
+         * 官方示例见 https://my.plantnet.org/doc/getting-started/introduction
+         */
+        fun <T> multipartFields(images: List<T>): List<Pair<String, T>> =
+            images.flatMap { listOf(ORGAN_FIELD to it, IMAGES_FIELD to it) }
+    }
+
     override suspend fun testConnection(request: ConnectivityRequest): ConnectivityResult =
         withContext(Dispatchers.IO) {
             try {
@@ -279,27 +371,4 @@ class PlantNetProvider(
         val genus: String?,
         val confidence: Double,
     )
-
-    private companion object {
-        /** all 项目库覆盖面最广（含世界范围的园林与野生植物） */
-        const val PROJECT = "all"
-
-        /**
-         * 带上照片的识别请求超时（秒）。
-         *
-         * 默认 90s 对**上传**往往不够：实测一张 388 KB 的照片在受限网络下
-         * 40s 都没传完。超时会被报成「连不上」，把用户引向网络排查，
-         * 而实际只是传得慢。给足 180s，宁可慢也不要误报。
-         */
-        const val UPLOAD_TIMEOUT_SECONDS = 180L
-
-        /**
-         * 建立连接的超时（秒）。
-         *
-         * 30s → 60s：受限网络下 TLS 握手本身就可能很慢。
-         * 连接超时与**传输**超时是两件事，前者给够才不会把
-         * 「传得慢」误报成「连不上」。
-         */
-        const val CONNECT_TIMEOUT_SECONDS = 60L
-    }
 }

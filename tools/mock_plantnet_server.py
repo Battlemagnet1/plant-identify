@@ -80,6 +80,28 @@ SAMPLE = {
 }
 
 
+def check_order_ok(order: list[str]) -> bool:
+    """字段顺序是否符合官方示例：`organs` 与 `images` 交替，且 organs 在前。
+
+    官方 getting-started 的示例（JS / Java / R 三种语言一致）：
+        form.append('organs', 'flower')
+        form.append('images', image1)
+        form.append('organs', 'leaf')
+        form.append('images', image2)
+
+    文档原文："Each organ is associated to an image in the order given."
+    —— 配对靠位置，所以顺序错了会把第一张图的部位配到最后一张上。
+    """
+    if not order:
+        return False
+    if len(order) % 2 != 0:
+        return False
+    for i in range(0, len(order), 2):
+        if order[i] != "organs" or order[i + 1] != "images":
+            return False
+    return True
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -117,26 +139,40 @@ class Handler(BaseHTTPRequestHandler):
 
         length = int(self.headers.get("Content-Length") or 0)
         ctype = self.headers.get("Content-Type", "")
-        # 把 multipart 读完，避免连接挂住
+        # 把 multipart 整个读完再回，避免连接挂住
+        raw = b""
         remaining = length
-        chunks = 0
         while remaining > 0:
             buf = self.rfile.read(min(65536, remaining))
             if not buf:
                 break
+            raw += buf
             remaining -= len(buf)
-            chunks += 1
 
-        body_head = ""
-        sys.stderr.write(
-            f"[mock-plantnet] POST images multipart: {length} bytes, "
-            f"ctype={'multipart' if 'multipart' in ctype else ctype}, chunks={chunks}\n"
+        # ---- 把 multipart 里的字段**顺序**解析出来 ----
+        # 这是本 mock 最有价值的地方：Pl@ntNet 的 organs 与 images 是
+        # **按请求中的位置配对**的，顺序错了会把部位配错图片。
+        # 官方示例是 organs 紧跟自己的 images 之前：
+        #     organs=flower, images=image1, organs=leaf, images=image2
+        body = raw.decode("utf-8", "replace")
+        parts = re.findall(r'name="([^"]+)"', body)
+        order = [p for p in parts if p in ("images", "organs")]
+        sizes = re.findall(r"Content-Length:\s*(\d+)", body)
+
+        print(
+            f"[mock-plantnet] POST {length} bytes 字段顺序={order} "
+            f"（期望：organs 与 images 交替、organs 在前）",
+            file=sys.stderr, flush=True,
         )
 
-        # 简单校验：必须真的带了 images 字段
-        if b"name=\"images\"" not in ctype.encode() and length < 1000:
-            self._json(400, {"statusCode": 400, "error": "Bad Request",
-                             "message": '"images" is required'})
+        # 校验字段顺序：必须 organs/images 交替，且**每段 organs 在前**
+        if not check_order_ok(order):
+            self._json(400, {
+                "statusCode": 400,
+                "error": "Bad Request",
+                "message": "字段顺序不符合官方示例：organs 必须在对应的 images 之前",
+                "receivedOrder": order,
+            })
             return
 
         self._json(200, SAMPLE)
