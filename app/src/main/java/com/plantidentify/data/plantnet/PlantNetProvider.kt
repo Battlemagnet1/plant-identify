@@ -327,16 +327,63 @@ class PlantNetProvider(
         )
     }
 
-    private fun organOf(role: ImageRole): String = when (role) {        ImageRole.LEAF -> "leaf"
-        ImageRole.FLOWER -> "flower"
-        ImageRole.FRUIT -> "fruit"
-        ImageRole.BARK -> "bark"
-        // Pl@ntNet 的 habit = 整株形态/生境，本项目的「整株」与「生境」都归它
-        ImageRole.WHOLE_PLANT, ImageRole.HABITAT -> "habit"
-        else -> "other"
-    }
-
+    /**
+     * 项目内的部位标注 → Pl@ntNet 的 `organs` 取值。
+     *
+     * ## 合法值只有五个（v1.0.2.1018 修正）
+     *
+     * 官方文档明确列出：`leaf` / `flower` / `fruit` / `bark`，
+     * 以及 `auto`（让模型自己判断）。
+     * 见 https://my.plantnet.org/doc/api/identify
+     *
+     * ## 原来写错了两处
+     *
+     * | 本项目 role | 原来发 | 正确 |
+     * |---|---|---|
+     * | `WHOLE_PLANT` / `HABITAT` | `"habit"` ❌ | `auto` |
+     * | `UNKNOWN`（未标注，**最常见**）| `"other"` ❌ | `auto` |
+     *
+     * `habit` 与 `other` 都**不在合法值列表里**。用户拍完照通常不标部位，
+     * 于是绝大多数请求发的都是 `"other"` —— 拿一个非法值去喂分类器，
+     * 轻则被忽略、重则把部位先验带偏。分类器是**拿部位去挑特征**的，
+     * 部位错了就会「认得出大类、认错近缘种」，正是用户反馈的
+     * 「数据又差又不准」。
+     *
+     * 未标注时发 `auto` 是对的：让模型自己从图里判断拍的是什么部位，
+     * 比强行宣称它是「other」准确得多。
+     *
+     * 放在 companion 里是为了**可单测** —— 它是纯函数，
+     * 而单元测试不该为了验证一张映射表去构造整个 Provider。
+     */
     companion object {
+        /**
+         * 项目内的部位标注 → Pl@ntNet 的 `organs` 取值。
+         *
+         * 合法值只有 `leaf` / `flower` / `fruit` / `bark` / `auto`
+         * （见 https://my.plantnet.org/doc/api/identify）。
+         *
+         * 原来 `WHOLE_PLANT`/`HABITAT` 发 `"habit"`、其余发 `"other"`，
+         * **两个都不是合法值**，而 `UNKNOWN`（用户不标部位时最常见）
+         * 正是走 `"other"` 那条。分类器拿部位挑特征，部位错了就会
+         * 「认得出大类、认错近缘种」—— 直接对应「识别不准」。
+         *
+         * 未标注一律发 `auto`：让模型自己判断部位，比强行宣称
+         * 它是 "other" 准确得多。
+         *
+         * 放在 companion 里是为了**可单测**：纯函数，测它不该
+         * 去构造整个 Provider。
+         */
+        internal fun organOf(role: ImageRole): String = when (role) {
+            ImageRole.LEAF -> "leaf"
+            ImageRole.FLOWER -> "flower"
+            ImageRole.FRUIT -> "fruit"
+            ImageRole.BARK -> "bark"
+            // 整株/生境在 Pl@ntNet 里没有对应部位，交给模型自己判断
+            ImageRole.WHOLE_PLANT, ImageRole.HABITAT -> "auto"
+            // 未标注（最常见）与其它一切 —— 一律 auto，绝不再发非法的 other
+            else -> "auto"
+        }
+
         /** 日志标签（不记 Key、不记图片内容） */
         const val TAG = "PlantNetProvider"
 

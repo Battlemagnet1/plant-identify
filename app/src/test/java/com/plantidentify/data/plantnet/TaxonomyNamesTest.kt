@@ -55,7 +55,8 @@ class TaxonomyNamesTest {
         val names = TaxonomyNames.fromOtherResults(otherResults(realShape))
 
         assertEquals("樟科", names.displayOf("Lauraceae"))
-        assertEquals("樟屬", names.displayOf("Camphora"))
+        // 原始数据是 "樟屬"（繁体），入库前统一转简体
+        assertEquals("樟属", names.displayOf("Camphora"))
         assertEquals("樟属", names.displayOf("Cinnamomum"))
         assertEquals("紫茉莉科", names.displayOf("Nyctaginaceae"))
     }
@@ -211,13 +212,25 @@ class TaxonomyNamesTest {
         assertEquals("新木姜子属", names.displayOf("Neolitsea"))
     }
 
-    /** 只有繁体时退回繁体 —— 有总比没有强，也比留空好 */
+    /**
+     * **只给繁体**时必须转成简体（v1.0.2.1018 真机实测发现的问题）。
+     *
+     * 真站对蔷薇科只回 `["薔薇科"]`、银杏科只回 `["銀杏科"]` —— 没有简体候选。
+     * 只做「优先挑简体」的话，这些仍会原样存进档案，于是同一个科在
+     * 不同记录里写成 `薔薇科` / `蔷薇科` 两种；而清洗是**按科属字符串比对**的，
+     * 这两条就认不出「同一科」。
+     */
     @Test
-    fun `只有繁体时仍采用`() {
+    fun `只有繁体时转成简体`() {
         val onlyTraditional = """
             {
+              "family": [
+                { "score": 0.9,
+                  "family": { "scientificName": "Rosaceae",
+                              "commonNames": ["薔薇科"] } }
+              ],
               "genus": [
-                { "score": 0.5,
+                { "score": 0.8,
                   "genus": { "scientificName": "Camphora",
                              "commonNames": ["樟屬"] } }
               ]
@@ -225,7 +238,42 @@ class TaxonomyNamesTest {
         """.trimIndent()
 
         val names = TaxonomyNames.fromOtherResults(JSONObject(onlyTraditional))
-        assertEquals("樟屬", names.displayOf("Camphora"))
+        assertEquals("蔷薇科", names.displayOf("Rosaceae"))
+        assertEquals("樟属", names.displayOf("Camphora"))
+    }
+
+    /** 银杏科 → 银杏科（銀 → 银） */
+    @Test
+    fun `银杏科转简体`() {
+        val ginkgo = """
+            {
+              "family": [
+                { "score": 0.95,
+                  "family": { "scientificName": "Ginkgoaceae",
+                              "commonNames": ["銀杏科"] } }
+              ]
+            }
+        """.trimIndent()
+
+        val names = TaxonomyNames.fromOtherResults(JSONObject(ginkgo))
+        assertEquals("银杏科", names.displayOf("Ginkgoaceae"))
+    }
+
+    /** 纯简体的名字必须**原样不动** —— 转换不能把正确的东西改坏 */
+    @Test
+    fun `简体原名不被改动`() {
+        listOf("蔷薇科", "樟科", "樟属", "银杏科", "菊科", "松科", "梅", "蕨")
+            .forEach { s ->
+                assertEquals("「$s」不应被改动", s, TaxonomyNames.toSimplified(s))
+            }
+    }
+
+    /** 转换只作用于已知字符；表外字符原样保留 */
+    @Test
+    fun `表外字符原样保留`() {
+        val mixed = "薔薇X科"
+        assertEquals("蔷薇X科", TaxonomyNames.toSimplified(mixed))
+        assertEquals("", TaxonomyNames.toSimplified(""))
     }
 
     /**
