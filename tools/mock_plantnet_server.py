@@ -74,6 +74,24 @@ SAMPLE = {
             },
         },
     ],
+    # 科属的中文名只在 otherResults 里（需 detailed=true）。
+    # 这里给真实形状：family/genus 两个数组，各自带 commonNames，
+    # 且**故意混入繁体**（`蔷薇科` vs `薔薇科`），用来验证「简体优先」。
+    "otherResults": {
+        "family": [
+            {"score": 0.92,
+             "family": {"scientificName": "Rosaceae",
+                        "commonNames": ["蔷薇科", "薔薇科"]}},
+            {"score": 0.03,
+             "family": {"scientificName": "Malvaceae",
+                        "commonNames": ["锦葵科"]}},
+        ],
+        "genus": [
+            {"score": 0.88,
+             "genus": {"scientificName": "Rosa",
+                       "commonNames": ["蔷薇属", "薔薇屬"]}},
+        ],
+    },
     "version": "mock-2025-01-17 (7.3)",
     "remainingIdentificationRequests": 497,
 }
@@ -184,6 +202,19 @@ class Handler(BaseHTTPRequestHandler):
                 "statusCode": 400,
                 "error": "Bad Request",
                 "message": "缺少 lang 参数：不传会回英文名，与视觉 AI 通道口径不一致",
+            })
+            return
+
+        # ---- 校验 detailed=true（v1.0.2.1018）----
+        #
+        # 科属的中文名只在 `otherResults` 里，而它**只有 detailed=true 才返回**。
+        # 不传的后果：科属永远是拉丁文，与视觉 AI 的中文口径对不上，
+        # 数据清洗按科属比对也会失效。
+        if "detailed=true" not in self.path:
+            self._json(400, {
+                "statusCode": 400,
+                "error": "Bad Request",
+                "message": "缺少 detailed=true：科属中文名只在 otherResults 里，不传会退回拉丁文",
             })
             return
 

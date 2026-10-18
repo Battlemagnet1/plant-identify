@@ -458,8 +458,19 @@ private fun ObservationPhotosCard(
                 modifier = Modifier.fillMaxWidth(),
                 enabled = !busy,
             ) {
-                Text(if (busy) "处理中…" else "添加照片")
+                // 明确写出「从相册」—— 只写「添加照片」时，用户不知道
+                // 能直接从系统相册挑（包括本应用「保存到相册」存进去的那些）。
+                // 这条路径本来就有（addImagesToObservation），但入口不点题，
+                // 于是用户以为「存到相册的图在应用里看不到」。
+                Text(if (busy) "处理中…" else "从相册添加照片")
             }
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "可选系统相册里的任意照片（含本应用保存到相册的图）。" +
+                    "新照片标记为「未标注」，不会覆盖封面，也不会重跑识别。",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }

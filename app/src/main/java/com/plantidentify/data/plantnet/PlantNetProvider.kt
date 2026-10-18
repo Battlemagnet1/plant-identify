@@ -134,8 +134,26 @@ class PlantNetProvider(
                 //   不带 lang  → commonNames = ["Camphor laurel", "Camphor tree", ...]
                 //   lang=zh    → commonNames = ["樟", "Zhāng"]
                 // 支持的语言见 /v2/languages（含 zh / zh-tw / zh-hant）。
+                //
+                // ## `detailed=true` 是科属中文名的唯一来源（v1.0.2.1018）
+                //
+                // Pl@ntNet 的 `species.family` / `species.genus` **只有拉丁名**，
+                // 没有 commonNames 字段。科属的中文名（`樟科` / `樟属`）只在
+                // `otherResults.family[]` / `otherResults.genus[]` 里 ——
+                // 而这两块**只有传 detailed=true 才会返回**。
+                //
+                // 不传的后果：科属永远是拉丁文，而视觉 AI 通道给的是中文
+                // （prompt 里明确要求「科」「属」为中文），于是同一个档案里
+                // 「樟科 / Cinnamomum」中拉混排；更要命的是**数据清洗按科属比对**，
+                // 两边写法不一致时「同一科的两种植物」根本认不出来。
+                //
+                // ## `nb-results` 让备选更有意义
+                //
+                // 不传时实测只回 2 条（score 0.47 与 0.0014），第二条低到没有
+                // 参考价值；传 10 能拿到更完整的候选序列，供用户判断。
                 val url = "${config.baseUrl.trimEnd('/')}/identify/$PROJECT" +
-                    "?api-key=${config.apiKey}&lang=$LANGUAGE"
+                    "?api-key=${config.apiKey}" +
+                    "&lang=$LANGUAGE&detailed=true&nb-results=$MAX_RESULTS"
                 // 大图上传在部分网络下很慢：388KB 的照片实测 40s 都可能不够。
                 // 用 per-call timeout 覆盖默认的 90s，避免「传了一半超时」
                 // 被当成「连不上」。
@@ -210,6 +228,11 @@ class PlantNetProvider(
         }
 
         val results = root.optJSONArray("results") ?: JSONArray()
+
+        // 科 / 属的**中文名**查表（拉丁名 → 中文名）。
+        // 来源只有 otherResults 这一处，见请求 URL 处的说明。
+        val zhNames = TaxonomyNames.fromOtherResults(root.optJSONObject("otherResults"))
+
         val candidates = buildList {
             for (i in 0 until results.length()) {
                 val item = results.optJSONObject(i) ?: continue
@@ -224,31 +247,22 @@ class PlantNetProvider(
                             .mapNotNull { array.optString(it).takeIf { s -> s.isNotBlank() } }
                     }
                     .orEmpty()
-                val family = species.optJSONObject("family")
+                val familyLatin = species.optJSONObject("family")
                     ?.optString("scientificNameWithoutAuthor")?.takeIf { it.isNotBlank() }
-                val genus = species.optJSONObject("genus")
+                val genusLatin = species.optJSONObject("genus")
                     ?.optString("scientificNameWithoutAuthor")?.takeIf { it.isNotBlank() }
 
-                // 中文名优先，没有就用学名。
-                //
-                // ## 为什么还要在 commonNames 里挑一次
-                //
-                // 即使传了 `lang=zh`，Pl@ntNet 的 commonNames 里仍会**混着
-                // 拼音**，而且是拉丁字母排在前面：
-                //     ["叶子花", "Ye zi hua", "Yè zi huā"]
-                // 更糟的是顺序不保证 —— 直接取 firstOrNull() 有可能拿到
-                // "Ye zi hua"，于是档案里出现一个拼音当正式中文名，
-                // 与视觉 AI 给的「叶子花」对不上，搜索和归并都会失效。
-                //
-                // 所以显式挑「含中日韩汉字」的那个；一个都没有才退回第一个。
-                val display = commonNames.firstOrNull(::hasHan) ?: commonNames.firstOrNull()
+                // 中文名优先，没有就用学名。**简体优先**，且不会被拼音顶掉 ——
+                // 规则见 pickDisplayName 的说明。
+                val display = pickDisplayName(commonNames)
 
                 add(
                     ParsedCandidate(
                         name = display ?: scientific ?: continue,
                         latinName = scientific,
-                        family = family,
-                        genus = genus,
+                        // 科属取**中文名**（查不到时退回拉丁名），与视觉 AI 通道口径一致
+                        family = zhNames.displayOf(familyLatin, familyLatin),
+                        genus = zhNames.displayOf(genusLatin, genusLatin),
                         confidence = score,
                     ),
                 )
@@ -267,6 +281,12 @@ class PlantNetProvider(
         // Pl@ntNet 的 score 是分类器输出（0-1），语义与本项目「AI 对当前
         // 视觉证据的置信程度」一致，直接沿用 —— 但 UI 上仍要标明来源
         val best = candidates.first()
+
+        // 该物种在 Pl@ntNet 库里**没有中文俗名**时，name 只能退回拉丁学名。
+        // 这种情况要让用户知道原因，否则档案里一半中文一半拉丁、
+        // 而人看不出「为什么这株是拉丁文」。
+        val noChineseName = best.name == best.latinName && !hasHan(best.name)
+
         return VisionCallResult.Success(
             VisionResponse(
                 result = RecognitionResult(
@@ -277,13 +297,20 @@ class PlantNetProvider(
                     confidence = best.confidence,
                     // 分类器给不出「判定依据」，据实留空
                     evidence = emptyList(),
-                    missingInformation = emptyList(),
+                    missingInformation = if (noChineseName) {
+                        listOf("Pl@ntNet 库中该物种没有中文俗名，已使用拉丁学名")
+                    } else {
+                        emptyList()
+                    },
                     alternatives = candidates.drop(1).take(5).map {
                         RecognitionResult.Alternative(name = it.name, confidence = it.confidence)
                     },
-                    conflicts = listOf(
-                        "识别来源：Pl@ntNet 分类模型（无判定依据描述）",
-                    ),
+                    conflicts = buildList {
+                        add("识别来源：Pl@ntNet 分类模型（无判定依据描述）")
+                        if (noChineseName) {
+                            add("该物种无中文俗名，名称为拉丁学名 —— 保存后可用「文字分析」通道补全中文名")
+                        }
+                    },
                 ),
                 rawText = raw,
             ),
@@ -308,8 +335,35 @@ class PlantNetProvider(
         const val ORGAN_FIELD = "organs"
         const val IMAGES_FIELD = "images"
 
-        /** all 项目库覆盖面最广（含世界范围的园林与野生植物） */
-        const val PROJECT = "all"
+        /**
+         * 项目库（referential）。
+         *
+         * ## 为什么**不能**用 `all`（v1.0.2.1018 修的就是它）
+         *
+         * 官方文档说 `all` 会「自动挑最相关的项目库」，听起来最省事。
+         * 但实测它**并不可靠**：同一张樟树照片、同样的参数，
+         * 服务端把 `preferedReferential` 解析成了 **`invasion`**
+         * ——一个**入侵物种**专题库（全站 75 个项目库之一）。
+         *
+         * 后果正是用户反馈的「数据又差又不准」：
+         *
+         * | 项目库 | 服务端采用的库 | 返回候选 | 头名 |
+         * |---|---|---|---|
+         * | `all` | **`invasion`**（入侵物种） | **2 条** | `Cinnamomum camphora` 0.47 |
+         * | `k-world-flora` | `k-world-flora`（世界植物志） | **9 条** | `Camphora officinarum` 0.43 |
+         *
+         * 两个问题都出在这里：
+         * - **候选太少**：窄库里只有 2 条，第二条 score 0.0014，等于没有备选
+         * - **分类过时**：`invasion` 库给的是旧名 `Cinnamomum camphora`，
+         *   而世界植物志给现行接受名 `Camphora officinarum`
+         *
+         * `k-world-flora` 是覆盖面最广的 Kew 世界植物志，对园林/野生植物都适用，
+         * 且**结果稳定**（连续三次都返回 9 条候选）。
+         *
+         * 代价：如果用户只想在某个地区库里查（例如欧洲调查项目），
+         * 需要自己改 Base URL —— 这比「悄悄查了入侵物种库」好得多。
+         */
+        const val PROJECT = "k-world-flora"
 
         /**
          * 结果语言（v1.0.3）。
@@ -323,6 +377,15 @@ class PlantNetProvider(
          * 支持的语言列表见 `/v2/languages`（`zh` / `zh-tw` / `zh-hant` 都在）。
          */
         const val LANGUAGE = "zh"
+
+        /**
+         * 请求返回的候选物种条数。
+         *
+         * 不传时实测只回 **2 条**，第二条 score 低到 0.0014，等于没有备选。
+         * 传 10 后能得到一条更完整的候选序列，用户才有得比较。
+         * 上限不用太大：`alternatives` 只展示前 5 条，取 10 已经够。
+         */
+        const val MAX_RESULTS = 10
 
         /**
          * 带上照片的识别请求超时（秒）。
@@ -350,6 +413,27 @@ class PlantNetProvider(
          */
         fun hasHan(text: String): Boolean =
             text.any { it.code in 0x4E00..0x9FFF || it.code in 0x3400..0x4DBF }
+
+        /**
+         * 从一组俗名里挑显示名，规则依次是：
+         * 1. 含汉字、且**不含繁体字**的（简体优先，与科属口径一致）
+         * 2. 含汉字的（哪怕是繁体）
+         * 3. 第一个非空的（通常是英文或拼音）
+         *
+         * 顺序不能反：Pl@ntNet 会给出 `["Zhāng", "樟"]` 这种拼音在前的数组，
+         * 也会给出 `["新木姜子属", "新木薑子屬"]` 这种简繁并列的数组。
+         * 直接取第一个会拿到拼音或繁体，与视觉 AI 通道对不上。
+         */
+        fun pickDisplayName(commonNames: List<String>): String? {
+            val nonBlank = commonNames.filter { it.isNotBlank() }
+            if (nonBlank.isEmpty()) return null
+
+            val chinese = nonBlank.filter(::hasHan)
+            if (chinese.isEmpty()) return nonBlank.first()
+
+            return chinese.firstOrNull { !TaxonomyNames.containsTraditional(it) }
+                ?: chinese.first()
+        }
 
         /**
          * 生成 multipart 的字段顺序：**每张图先 organs、后 images**。

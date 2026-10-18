@@ -145,7 +145,11 @@ fun ImageViewerHost(
                 baseName = MediaSaver.baseName(nameHint),
             )
             status = result.fold(
-                onSuccess = { "已保存到相册 Pictures/${MediaSaver.ALBUM}" },
+                // 说清这是**导出**：图会进系统相册，但应用自己的档案不会因此多出一张。
+                // 用户反馈过「存到相册后在应用里看不到」—— 那是设计如此
+                // （应用只展示自己库里的照片），但提示里必须讲明白，
+                // 否则会当成 bug。反方向的入口在「编辑 → 从相册添加照片」。
+                onSuccess = { "已导出到系统相册 Pictures/${MediaSaver.ALBUM}（档案里的照片不受影响）" },
                 onFailure = { it.message ?: "保存失败，请重试" },
             )
             saving = false
