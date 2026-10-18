@@ -112,6 +112,26 @@ sealed class AiFailure(
         serverDetail = detail,
     )
 
+    /**
+     * 图里没有可识别的植物（Pl@ntNet 用 404 + `"Species not found"` 表达）。
+     *
+     * ## 为什么必须与 [EndpointNotFound] 分开
+     *
+     * 两者都是 HTTP 404，但含义完全相反：
+     * - 端点写错 → 用户该去改 Base URL
+     * - 图里没植物 → **配置完全正确**，换张照片就行
+     *
+     * 混为一谈的后果：用户拍了一张风景照，得到「请确认 Base URL 填写正确」，
+     * 于是跑去反复改一个完全正确的地址 —— 而这跟地址毫无关系。
+     * 这类「错误提示指向错误的排查方向」比不提示更糟。
+     */
+    class NoRecognizableSubject(detail: String?) : AiFailure(
+        userMessage = "这张照片里没有识别出植物",
+        fixHint = "换一张主体清晰、占满画面的植物照片；整株 + 叶片特写各一张会更准",
+        canRetry = true,
+        serverDetail = detail,
+    )
+
     /** 400 且错误信息指向模型：模型名不存在或未开通 */
     class ModelNotFound(detail: String?) : AiFailure(
         userMessage = "模型名不正确，或该模型未在你的账号下开通",

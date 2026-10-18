@@ -245,4 +245,38 @@ class TaxonomyNamesTest {
         assertTrue(TaxonomyNames.containsTraditional("葉"))
         assertTrue(TaxonomyNames.containsTraditional("樹"))
     }
+
+    // ---------------------------------------------------------- 404 的两种含义
+
+    /**
+     * Pl@ntNet 的 404 有**两种完全相反**的含义，只能靠 body 分辨：
+     *
+     * - 端点/项目库名写错 → 该让用户改 Base URL
+     * - `"Species not found"` → **配置完全正确**，只是图里没有植物
+     *
+     * 混为一谈时，用户拍了一张风景照会看到「请确认 Base URL 填写正确」，
+     * 于是跑去反复改一个正确的地址 —— 把用户引向错误的排查方向，
+     * 比不提示更糟。
+     */
+    @Test
+    fun `Species not found 判定为图里没植物`() {
+        assertTrue(
+            PlantNetProvider.isSpeciesNotFound(
+                """{"statusCode":404,"error":"Not Found","message":"Species not found"}""",
+            ),
+        )
+        assertTrue(PlantNetProvider.isSpeciesNotFound("""{"message":"SPECIES NOT FOUND"}"""))
+    }
+
+    /** 端点写错时的 404 不能被误判成「没植物」，否则用户就不会去改地址了 */
+    @Test
+    fun `端点错的 404 不等于没植物`() {
+        assertFalse(
+            PlantNetProvider.isSpeciesNotFound(
+                """{"statusCode":404,"error":"Not Found","message":"Not found"}""",
+            ),
+        )
+        assertFalse(PlantNetProvider.isSpeciesNotFound("""{"message":"Server Error"}"""))
+        assertFalse(PlantNetProvider.isSpeciesNotFound(""))
+    }
 }

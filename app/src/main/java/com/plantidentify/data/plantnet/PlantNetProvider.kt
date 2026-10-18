@@ -166,7 +166,17 @@ class PlantNetProvider(
                         return@use VisionCallResult.Failure(
                             when (resp.code) {
                                 401, 403 -> AiFailure.Unauthorized(detail)
-                                404 -> AiFailure.EndpointNotFound(detail)
+                                // ⚠️ Pl@ntNet 的 404 **有两种含义**，必须靠 body 分辨：
+                                //   ① 端点/项目库名写错 → 提示「Base URL 不对」
+                                //   ② 图里没有可识别的物种 → `"Species not found"`
+                                // ②是**合法请求的正常结果**（照片不是植物、太糊、
+                                // 或只拍到背景），不是配置问题。当成「地址错」
+                                // 会让用户跑去改一个完全正确的 Base URL。
+                                404 -> if (isSpeciesNotFound(raw)) {
+                                    AiFailure.NoRecognizableSubject(detail)
+                                } else {
+                                    AiFailure.EndpointNotFound(detail)
+                                }
                                 429 -> AiFailure.RateLimited(detail)
                                 in 500..599 -> AiFailure.ServerError(resp.code, detail)
                                 else -> AiFailure.BadRequest(detail)
@@ -317,8 +327,7 @@ class PlantNetProvider(
         )
     }
 
-    private fun organOf(role: ImageRole): String = when (role) {
-        ImageRole.LEAF -> "leaf"
+    private fun organOf(role: ImageRole): String = when (role) {        ImageRole.LEAF -> "leaf"
         ImageRole.FLOWER -> "flower"
         ImageRole.FRUIT -> "fruit"
         ImageRole.BARK -> "bark"
@@ -404,6 +413,19 @@ class PlantNetProvider(
          * 「传得慢」误报成「连不上」。
          */
         const val CONNECT_TIMEOUT_SECONDS = 60L
+
+        /**
+         * 判断 404 是不是「图里没有可识别的物种」。
+         *
+         * Pl@ntNet 对这两种情况都回 404，只能看 body：
+         * - 端点错：`{"statusCode":404,"message":"Server Error"}` 之类
+         * - 没认出：`{"statusCode":404,"message":"Species not found"}`
+         *
+         * 判据用 `species not found` 子串（大小写不敏感），**不**依赖
+         * statusCode —— 两者都是 404，用它区分不了。
+         */
+        fun isSpeciesNotFound(raw: String): Boolean =
+            raw.contains("species not found", ignoreCase = true)
 
         /**
          * 字符串里是否含汉字（CJK 统一表意文字 + 扩展 A）。
