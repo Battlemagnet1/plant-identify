@@ -71,7 +71,7 @@ internal class TaxonomyNames(
 
                 val names = node.optJSONArray("commonNames") ?: continue
                 val all = (0 until names.length()).map { names.optString(it) }
-                val zh = pickChinese(all) ?: continue
+                val zh = pickChinese(all, isGenus = level == "genus") ?: continue
 
                 // 先到先得：otherResults 按 score 降序，第一条就是最可能的那个
                 into.putIfAbsent(latin.lowercase(), zh)
@@ -79,7 +79,7 @@ internal class TaxonomyNames(
         }
 
         /**
-         * 从一组俗名里挑中文名，并**转成简体**。
+         * 从一组俗名里挑中文名，转简体，并在**属名**上做规范化。
          *
          * ## 为什么要转，而不只是「优先挑简体」
          *
@@ -91,14 +91,39 @@ internal class TaxonomyNames(
          * 所以「同时有简繁就挑简体」只解决一半；**只给繁体**时仍会存进档案。
          * 结果同一个科在不同记录里写成 `薔薇科` / `蔷薇科` 两种，
          * 而 `DuplicateMatcher` 按科属字符串比对 → 认不出「同一科」。
+         *
+         * ## 属名为什么还要挑「带属字的」
+         *
+         * 实测 `Lavandula` 的 commonNames 是：
+         *     ["薰衣草", "薰衣草屬"]
+         * **首项缺「属」字**，次项才是规范的属名。而其它属（鼠尾草属、
+         * 荆芥属、马鞭草属）都是带「属」的完整形式。
+         *
+         * 直接取第一条会让同一批档案里出现「薰衣草」这种既像物种名
+         * 又像属名的写法 —— 而物种名也叫「薰衣草」，两者撞在一起，
+         * 科属比对与展示都会含糊。
+         *
+         * 所以属名**优先挑以「属」结尾的**；没有才退回第一个。
+         * 注意**不能**反过来给任意名字无脑补「属」字 —— 那会发明
+         * Pl@ntNet 没给的名字（例如把物种名「薰衣草」改成「薰衣草属」）。
          */
-        private fun pickChinese(names: List<String>): String? {
+        private fun pickChinese(names: List<String>, isGenus: Boolean): String? {
             val chinese = names.filter { it.isNotBlank() && containsHan(it) }
             if (chinese.isEmpty()) return null
 
+            val simplified = chinese.map(::toSimplified)
+
+            if (isGenus) {
+                // 属名：先挑「X属」形式；优先本来就简体的
+                val proper = simplified.filter { it.endsWith("属") && it.length > 1 }
+                if (proper.isNotEmpty()) return proper.first()
+            }
+
             // 优先挑本来就全简体的那条（它通常也是更规范的写法）
-            val alreadySimplified = chinese.firstOrNull { toSimplified(it) == it }
-            return toSimplified(alreadySimplified ?: chinese.first())
+            val alreadySimplified = chinese.withIndex()
+                .firstOrNull { (_, v) -> toSimplified(v) == v }
+                ?.let { (i, _) -> simplified[i] }
+            return alreadySimplified ?: simplified.first()
         }
 
         /** 与 `PlantNetProvider.hasHan` 同一判据（CJK 统一表意文字 + 扩展 A） */

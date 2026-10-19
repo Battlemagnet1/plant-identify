@@ -276,6 +276,94 @@ class TaxonomyNamesTest {
         assertEquals("", TaxonomyNames.toSimplified(""))
     }
 
+    // ---------------------------------------------------------- 属名规范化
+
+    /**
+     * **属名优先挑带「属」字的那条**（v1.0.2.1018 实机实测发现）。
+     *
+     * 真站对 `Lavandula` 的 commonNames 是：
+     *     ["薰衣草", "薰衣草屬"]
+     * **首项缺「属」字**，次项才是规范的属名。
+     *
+     * 直接取第一条，档案里就会出现「薰衣草」这种写法 ——
+     * 而物种名也叫「薰衣草」，两者撞在一起，科属展示与比对都含糊。
+     */
+    @Test
+    fun `属名优先挑带属字的`() {
+        val lavender = """
+            {
+              "genus": [
+                { "score": 0.9,
+                  "genus": { "scientificName": "Lavandula",
+                             "commonNames": ["薰衣草", "薰衣草屬"] } }
+              ]
+            }
+        """.trimIndent()
+
+        val names = TaxonomyNames.fromOtherResults(JSONObject(lavender))
+        assertEquals("薰衣草属", names.displayOf("Lavandula"))
+    }
+
+    /** 科名不做「属」后缀处理 —— 科就是「XX科」 */
+    @Test
+    fun `科名不会被加成属`() {
+        val fam = """
+            {
+              "family": [
+                { "score": 0.9,
+                  "family": { "scientificName": "Lamiaceae",
+                              "commonNames": ["唇形科"] } }
+              ]
+            }
+        """.trimIndent()
+
+        val names = TaxonomyNames.fromOtherResults(JSONObject(fam))
+        assertEquals("唇形科", names.displayOf("Lamiaceae"))
+    }
+
+    /**
+     * **绝不能给任意名字无脑补「属」字**。
+     *
+     * 接口只给 `["薰衣草"]`（没有规范的「薰衣草屬」）时必须原样用 ——
+     * 补成「薰衣草属」等于发明 Pl@ntNet 没给的名字。
+     */
+    @Test
+    fun `没有规范属名时不编造`() {
+        val onlyPlain = """
+            {
+              "genus": [
+                { "score": 0.9,
+                  "genus": { "scientificName": "Lavandula",
+                             "commonNames": ["薰衣草"] } }
+              ]
+            }
+        """.trimIndent()
+
+        val names = TaxonomyNames.fromOtherResults(JSONObject(onlyPlain))
+        assertEquals("薰衣草", names.displayOf("Lavandula"))
+    }
+
+    /**
+     * 科没有中文名时（实测 `Asteraceae` 只给
+     * `["Composite","Daisy Family","Sunflowers"]`）→ 退回拉丁名，
+     * **绝不空着**：空值会让「同科」判据彻底失效。
+     */
+    @Test
+    fun `科无中文名时退回拉丁名`() {
+        val onlyEnglish = """
+            {
+              "family": [
+                { "score": 0.88,
+                  "family": { "scientificName": "Asteraceae",
+                              "commonNames": ["Composite", "Daisy Family"] } }
+              ]
+            }
+        """.trimIndent()
+
+        val names = TaxonomyNames.fromOtherResults(JSONObject(onlyEnglish))
+        assertEquals("Asteraceae", names.displayOf("Asteraceae"))
+    }
+
     /**
      * 同形字**不能**被当成繁体 —— 否则「樟科」会被判成繁体而退回第一条，
      * 反而选错。这是本判据唯一危险的误判方向。
