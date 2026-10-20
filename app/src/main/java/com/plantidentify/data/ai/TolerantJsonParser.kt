@@ -134,6 +134,18 @@ object TolerantJsonParser {
                 "common_names", "commonnames", "common_name", "commonname",
                 "alias", "aliases", "other_names", "俗称", "别名", "常用名", "常用名称",
             ),
+            // 名称与科属的规范写法（v1.0.2.1018）—— 用于纠正识别通道给的
+            // 拉丁科名 / 非中文名。多个别名都认，模型换键名不至于全丢。
+            canonicalName = root.readString(
+                "canonical_name", "canonicalname", "proper_name", "formal_name",
+                "规范名称", "正式中文名", "中文名",
+            ),
+            canonicalFamily = root.readString(
+                "canonical_family", "canonicalfamily", "family", "科", "科名", "科属",
+            ),
+            canonicalGenus = root.readString(
+                "canonical_genus", "canonicalgenus", "genus", "属", "属名",
+            ),
             description = root.readString(
                 "description", "intro", "introduction", "简介", "植物简介", "介绍",
             ),

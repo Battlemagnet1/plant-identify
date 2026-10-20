@@ -4,6 +4,7 @@ import android.net.Uri
 import androidx.room.withTransaction
 import com.plantidentify.data.ai.PlantAnalysis
 import com.plantidentify.data.ai.RecognitionResult
+import com.plantidentify.data.ai.TaxonomyCorrector
 import com.plantidentify.data.ai.TolerantJsonParser
 import com.plantidentify.data.draft.CaptureDraft
 import com.plantidentify.data.draft.CaptureDraftStore
@@ -252,8 +253,27 @@ class PlantRepository(
         val existing = plantRecordDao.getById(plantId)
             ?: error("植物档案不存在")
 
+        // 百科模型顺带给出的规范名称与科属（v1.0.2.1018）。
+        // **只补不覆盖**：仅当现有值是空的、或是拉丁文/拼音时才写入 ——
+        // 绝不推翻视觉 AI 已给出的中文名，也不动用户手改的内容。
+        // 判据集中放在 TaxonomyCorrector（纯函数，有单测）。
+        val fix = analysis?.let {
+            TaxonomyCorrector.plan(
+                currentName = existing.name,
+                currentLatinName = existing.latinName,
+                currentFamily = existing.family,
+                currentGenus = existing.genus,
+                suggested = it,
+            )
+        } ?: TaxonomyCorrector.NONE
+
         plantRecordDao.update(
             existing.copy(
+                // 名称：只有当前不是中文名（拉丁名/拼音/空）时才补
+                name = fix.name ?: existing.name,
+                // 科属：只有当前不是中文时才补
+                family = fix.family ?: existing.family,
+                genus = fix.genus ?: existing.genus,
                 // 别名与百科字段一样，来自文字分析；为空时保留原值，
                 // 避免一次「模型没给出别名」的重新生成把用户手填的俗称抹掉
                 commonNames = analysis?.commonNames ?: existing.commonNames,

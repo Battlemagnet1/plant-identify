@@ -206,6 +206,8 @@ object PromptBuilder {
             appendLine(ANALYSIS_SCHEMA_SPEC.trimIndent())
             appendLine()
             appendLine(ANALYSIS_CONTENT_RULES.trimIndent())
+            appendLine()
+            appendLine(ANALYSIS_TAXONOMY_RULES.trimIndent())
 
             // 百科同样可以受益于地点：同一物种在南北方的花期、越冬表现差很多。
             // 但仍按弱先验处理 —— 不能因为「种在杭州」就把花期写成江浙的，
@@ -376,6 +378,9 @@ object PromptBuilder {
         只输出一个 JSON 对象，不要有任何其他文字，也不要使用 ``` 代码块标记。
 
         {
+          "canonical_name": "这株植物的规范中文名",
+          "canonical_family": "规范性中文科名，如「菊科」",
+          "canonical_genus": "规范性中文属名，如「向日葵属」（必须以「属」结尾）",
           "common_names": "常用名称或俗称，多个用「、」分隔",
           "description": "植物简介",
           "morphological_features": "形态特征",
@@ -386,6 +391,24 @@ object PromptBuilder {
           "care_advice": "养护建议",
           "pest_control": "常见病虫害与防治建议"
         }
+    """.trimIndent()
+
+    private val ANALYSIS_TAXONOMY_RULES = """
+        7. **canonical_name / canonical_family / canonical_genus 用于核对名称与科属**
+
+           识别通道有时会给出不规范的名称（例如只给拉丁学名、给拼音、
+           或科属写成拉丁文）。请根据你掌握的植物学知识，给出**规范写法**：
+
+           - canonical_name：**植物学上的正式中文名**（如「向日葵」）。
+             识别结果给的是拉丁名、拼音或俗称时，这里填正式中文名。
+             若识别结果已经是对的，**原样填回**即可。
+           - canonical_family：中文科名，以「科」结尾（如「菊科」「唇形科」）。
+             识别结果给的是 `Asteraceae` 这类拉丁科名时，务必填中文。
+           - canonical_genus：中文属名，**必须以「属」结尾**（如「向日葵属」）。
+             不确定该属的正式中文名时填空字符串 "" ——
+             宁可留空让程序保留原值，也不要猜一个错的。
+
+           **所有名称都用简体中文。** 不要用繁体字。
     """.trimIndent()
 
     private val ANALYSIS_CONTENT_RULES = """

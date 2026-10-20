@@ -1,5 +1,6 @@
 package com.plantidentify.ui.screens.search
 
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -8,6 +9,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardActions
@@ -137,26 +140,38 @@ fun SearchScreen(
             }
 
             // ---- 日期区间
+            //
+            // 同样要能横向滚动：四个 chip + 「日期」标签在窄屏放不下，
+            // 固定 Row 会把它们压成一字一行的竖排（与 FilterRow 同一个坑）。
             Row(
+                modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text(
                     text = "日期",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                DateChip("不限", filters.fromDate == null) {
-                    viewModel.setDateRange(null, null)
-                }
-                DateChip("近 7 天", filters.fromDate == daysAgo(now, 7)) {
-                    viewModel.setDateRange(daysAgo(now, 7), null)
-                }
-                DateChip("近 30 天", filters.fromDate == daysAgo(now, 30)) {
-                    viewModel.setDateRange(daysAgo(now, 30), null)
-                }
-                DateChip("今年", filters.fromDate == yearStart(now)) {
-                    viewModel.setDateRange(yearStart(now), null)
+                Spacer(Modifier.width(8.dp))
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .horizontalScroll(rememberScrollState()),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    DateChip("不限", filters.fromDate == null) {
+                        viewModel.setDateRange(null, null)
+                    }
+                    DateChip("近 7 天", filters.fromDate == daysAgo(now, 7)) {
+                        viewModel.setDateRange(daysAgo(now, 7), null)
+                    }
+                    DateChip("近 30 天", filters.fromDate == daysAgo(now, 30)) {
+                        viewModel.setDateRange(daysAgo(now, 30), null)
+                    }
+                    DateChip("今年", filters.fromDate == yearStart(now)) {
+                        viewModel.setDateRange(yearStart(now), null)
+                    }
                 }
             }
 
@@ -201,6 +216,22 @@ fun SearchScreen(
     }
 }
 
+/**
+ * 一行筛选 chip：「标签 + 若干 chip」，**可横向滚动**。
+ *
+ * ## 为什么不能直接用 `Row`（v1.0.2.1018 修）
+ *
+ * 原来是固定 `Row`，chip 数量随科属个数增长。手机窄屏放不下时，
+ * Compose 会把子元素**压缩到能塞进一行的宽度** —— 每个 chip 只剩几个
+ * 像素宽，`Text` 只能每行放一个字，于是「近 30 天」竖着摞起来，
+ * 整行看起来像被压扁的乱码。这不是「换行」，是**被挤扁**。
+ *
+ * `Row` 里加 `horizontalScroll`：每个 chip 保持自然宽度，
+ * 放不下就横向滑动去找，文字永远不会被压到一字一行。
+ *
+ * 标签（「科」「属」）放在滚动区**外面**，滑动时它固定不动 ——
+ * 否则滑到中段就不知道这排是科还是属了。
+ */
 @Composable
 private fun FilterRow(
     title: String,
@@ -211,28 +242,38 @@ private fun FilterRow(
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Text(
             text = title,
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        // 只显示前几个：科属可能几十个，纵向堆叠会把结果挤出屏幕。
-        // 想选别的可以先输关键词，把范围收窄
-        options.take(MAX_FILTER_CHIPS).forEach { option ->
-            FilterChip(
-                selected = selected == option,
-                onClick = { onSelect(if (selected == option) "" else option) },
-                label = { Text(option) },
-            )
-        }
-        if (options.size > MAX_FILTER_CHIPS) {
-            Text(
-                text = "等 ${options.size} 项",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+        Spacer(Modifier.width(8.dp))
+        Row(
+            modifier = Modifier
+                .weight(1f)
+                .horizontalScroll(rememberScrollState()),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            // 只显示前几个：科属可能几十个，全排出来要滑很久。
+            // 想选别的可以先输关键词，把范围收窄
+            options.take(MAX_FILTER_CHIPS).forEach { option ->
+                FilterChip(
+                    selected = selected == option,
+                    onClick = { onSelect(if (selected == option) "" else option) },
+                    // 允许文字换行，但 chip 本身按内容取宽，不会被压成竖排
+                    label = { Text(option, maxLines = 1) },
+                )
+            }
+            if (options.size > MAX_FILTER_CHIPS) {
+                Text(
+                    text = "等 ${options.size} 项",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                )
+            }
         }
     }
 }

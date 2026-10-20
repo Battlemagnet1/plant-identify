@@ -41,6 +41,21 @@ data class PlantAnalysis(
      */
     val commonNames: String? = null,
 
+    /**
+     * 规范中文名（v1.0.2.1018）。
+     *
+     * 百科模型会顺带核对「这株植物叫什么」，用于**纠正识别通道给错的名称**。
+     * 只在原值缺失、或是拉丁名/拼音时才回填 —— 绝不覆盖用户手改的内容，
+     * 也不覆盖视觉 AI 已给出的正式中文名（见 `TaxonomyCorrector`）。
+     */
+    val canonicalName: String? = null,
+
+    /** 规范中文「科」（如「菊科」），同上：仅用于纠正，不覆盖用户输入 */
+    val canonicalFamily: String? = null,
+
+    /** 规范中文「属」（如「向日葵属」），同上 */
+    val canonicalGenus: String? = null,
+
     /** 植物简介 */
     val description: String? = null,
 
