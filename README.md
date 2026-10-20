@@ -17,10 +17,13 @@ sections below cover installation, AI configuration and every feature in detail.
 
 ## 当前状态
 
-**功能开发完成，已发布 v1.0.2.1011。** `main` 可编译、可运行；单元测试 **586 用例**（293 × 2 个版本）全绿。
+**功能开发完成，已发布 v1.0.2.1020。** `main` 可编译、可运行；单元测试 **662 用例**（331 × 2 个版本）全绿。
 
 识别通道支持**视觉 AI 与 Pl@ntNet 两条路**，并可开启「自动（双源比对）」让两者互校。
 两条通道的**置信度语义不同**（语言模型自估 vs 分类器后验），因此应用**只做定性比对、绝不把两者的分数相加或平均**。
+
+> **v1.0.2.1020 修的是 Pl@ntNet 通道**：端点、请求格式、语言与科属名。
+> 详见 [Release 说明](https://github.com/Battlemagnet1/plant-identify/releases)。
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
@@ -45,18 +48,13 @@ sections below cover installation, AI configuration and every feature in detail.
 
 | 版本 | 包名 | 说明 |
 |---|---|---|
-| [v1.0.2.1011-full](https://github.com/Battlemagnet1/plant-identify/releases/tag/v1.0.2.1011-full) | `com.plantidentify.full` | **完整版，推荐**（当前 Latest）。含统计、识别任务、数据清洗、文件夹与景观、地点、导入导出与备份 |
-| [v1.0.2.1011](https://github.com/Battlemagnet1/plant-identify/releases/tag/v1.0.2.1011) | `com.plantidentify` | **基础版**。多图识别、百科、档案、搜索、归并、Pl@ntNet 都有；统计 / 清洗 / 地点 / 导入导出等仅完整版有 |
+| [v1.0.2.1020-full](https://github.com/Battlemagnet1/plant-identify/releases/tag/v1.0.2.1020-full) | `com.plantidentify.full` | **完整版，推荐**（当前 Latest）。含统计、识别任务、数据清洗、文件夹与景观、地点、导入导出与备份 |
+| [v1.0.2.1020](https://github.com/Battlemagnet1/plant-identify/releases/tag/v1.0.2.1020) | `com.plantidentify` | **基础版**。多图识别、百科、档案、搜索、归并、Pl@ntNet 都有；统计 / 清洗 / 地点 / 导入导出等仅完整版有 |
 
 - 要求 **Android 8.0（API 26）及以上**。
 - **两个版本可以同时安装**（包名不同），档案数据也能通过备份包互相迁移。
 - 签名证书 SHA-256：`95065ED8A06005DB8F6D8D6EB0403E1C94DAF0D5B0AF2D160C5C38643675D9F1`
 - 装完**必须先配置 AI 服务**才能识别，见下文「如何配置 API」。
-
-> ⚠️ **v1.0.2.1011 的 APK 不在 Release 的 assets 里**，而在 `release-assets` 分支上
-> （本机到 `uploads.github.com` 的上行受限，无法上传大文件）：
-> 完整版 <https://github.com/Battlemagnet1/plant-identify/raw/release-assets/release-apk/plant-identify-full-v1.0.2.1011.apk> ·
-> 基础版 <https://github.com/Battlemagnet1/plant-identify/raw/release-assets/release-apk/plant-identify-base-v1.0.2.1011.apk>
 
 > 图文并茂的使用教程见 [`docs/Plant Identify Library 使用教程.pdf`](docs/)。
 
@@ -68,7 +66,7 @@ sections below cover installation, AI configuration and every feature in detail.
 |---|---|---|
 | applicationId | `com.plantidentify` | `com.plantidentify.full` |
 | 应用显示名 | Plant Identify Library | Plant Identify Library（完整版） |
-| 版本号 | `1.0.2.1011` / code 3 | `1.0.2.1011` / code 4 |
+| 版本号 | `1.0.2.1020` / code 4 | `1.0.2.1020` / code 5 |
 | 多图识别 · 植物百科 · 档案 · 搜索筛选 · 多次观察 · 归并 · 备注 · Pl@ntNet | ✅ | ✅ |
 | 统计数据（不同植物 / 观察次数 / 照片数） | — | ✅ |
 | 识别任务队列（后台批量识别） | — | ✅ |
@@ -190,6 +188,25 @@ Pl@ntNet 的端点固定为 `https://my-api.plantnet.org/v2`（可改，便于�
 > 对自身判断的把握程度估计 —— 两者语义不同，**相加、平均、比大小都是无意义的数字**。
 > 所以「自动」模式只做定性比对，不会替你挑一个「分数高的」。
 > 同理，**后台批量识别固定走视觉 AI**：Pl@ntNet 免费额度太小，队列一跑就超限。
+
+#### Pl@ntNet 的科属名是怎么处理的
+
+分类器只给**拉丁学名**；科属的中文名要额外查一步，而且**不是每个物种都有**。
+
+应用为此做了四件事（v1.0.2.1020）：
+
+1. **结果统一要中文** —— 请求固定带 `lang=zh`，否则接口默认回英文
+2. **科属中文名从 `otherResults` 取** —— 这需要请求带 `detailed=true`，
+   而 `species.family` / `.genus` 本身**只有拉丁名**
+3. **繁体转简体** —— 接口常只给繁体（`薔薇科`、`銀杏科`、`樟屬`），
+   不转会与简体科名混排，导致按科属比对的去重失效
+4. **属名取规范形式** —— 接口有时给「薰衣草」和「薰衣草屬」两条，
+   首条缺「属」字；应用优先取带「属」的那条
+
+**接口查不到中文时会如实显示拉丁名**（实测 `Asteraceae` 只回
+`["Composite","Daisy Family"]`，没有「菊科」），绝不编造。
+这时可以点「生成植物百科」—— 文字模型会顺手核对并补上规范中文科属，
+且**只补空值/拉丁值，绝不覆盖已有的中文名**。
 
 配置存放在本机的 DataStore 中，其中 API Key 使用 **Android Keystore 的 AES-256-GCM** 加密后存放。
 
@@ -453,6 +470,19 @@ python tools/verify_release_apk.py --edition full
   **绝不自动挑一个「分数高的」**
 - Pl@ntNet 按**分类器**能力返回结果，没有形态特征、判定依据与养护建议 —— 这些字段留空，
   需要时由文字分析通道补齐
+
+**关于 Pl@ntNet 的识别准确度**（2026-10 用真实照片实测后记下的结论）：
+
+- **科属中文名不是 100% 覆盖。** 实测 `Asteraceae`（菊科）接口只回英文
+  `["Composite","Daisy Family"]`，没有「菊科」，此时档案里会显示拉丁科名。
+  这是接口的数据缺口，应用**如实显示而不是编造**。
+  补救办法是点「生成植物百科」，由文字模型补上（见上文）。
+- **`organs`（部位标注）对结果几乎没有影响。** 用同一张向日葵照片逐个对比
+  `leaf` / `flower` / `auto` 三种取值，返回的物种与分数**完全相同** ——
+  所以「没标部位」不影响准确度，不必为此纠结。
+- **近缘种可能认错。** 例如向日葵可能被判成同属的 *Helianthus giganteus*
+  （0.57）而不是 *H. annuus*（0.36）。这类误差来自分类器本身，
+  应用侧无法修正；结果页会用星标提示置信度偏低，可补拍更多部位再识别。
 
 ## 分支与协作约定
 
